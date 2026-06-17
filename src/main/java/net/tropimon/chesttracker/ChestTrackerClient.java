@@ -60,4 +60,57 @@ public class ChestTrackerClient implements ClientModInitializer {
 
                 int chunkXStart = (playerPos.getX() - 64) >> 4;
                 int chunkXEnd = (playerPos.getX() + 64) >> 4;
-                int chunkZStart =
+                int chunkZStart = (playerPos.getZ() - 64) >> 4;
+                int chunkZEnd = (playerPos.getZ() + 64) >> 4;
+
+                for (int cx = chunkXStart; cx <= chunkXEnd; cx++) {
+                    for (int cz = chunkZStart; cz <= chunkZEnd; cz++) {
+                        WorldChunk chunk = client.world.getChunk(cx, cz);
+                        if (chunk == null) continue;
+
+                        for (BlockPos pos : chunk.getBlockEntityPositions()) {
+                            int relX = Math.abs(pos.getX() - playerPos.getX());
+                            int relZ = Math.abs(pos.getZ() - playerPos.getZ());
+                            int relY = playerPos.getY() - pos.getY();
+
+                            if (relX <= 64 && relZ <= 64 && relY >= 0 && relY <= 64) {
+                                net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
+                                if (be instanceof net.minecraft.block.entity.ChestBlockEntity || 
+                                    be instanceof net.minecraft.block.entity.EnderChestBlockEntity) {
+                                    chestPositions.add(pos.toImmutable());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        WorldRenderEvents.LAST.register(context -> {
+            if (!active || chestPositions.isEmpty()) return;
+
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (client.world == null) return;
+
+            MatrixStack matrices = context.matrixStack();
+            VertexConsumerProvider consumers = context.consumers();
+            Vec3d cameraPos = context.camera().getPos();
+            
+            VertexConsumer buffer = consumers.getBuffer(RenderLayer.getLines());
+
+            float r = 0.0f;
+            float g = 0.6f;
+            float b = 1.0f;
+            float a = 1.0f;
+
+            for (BlockPos pos : chestPositions) {
+                matrices.push();
+                matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
+
+                WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, r, g, b, a);
+
+                matrices.pop();
+            }
+        });
+    }
+}
