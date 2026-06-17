@@ -11,6 +11,7 @@ import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.render.WorldRenderer;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
@@ -51,7 +52,7 @@ public class ChestTrackerClient implements ClientModInitializer {
             if (!active) return;
 
             scanTick++;
-            if (scanTick >= 20) {
+            if (scanTick >= 80) { // Fixé à 80 ticks (4 secondes)
                 scanTick = 0;
                 chestPositions.clear();
 
@@ -59,81 +60,4 @@ public class ChestTrackerClient implements ClientModInitializer {
 
                 int chunkXStart = (playerPos.getX() - 64) >> 4;
                 int chunkXEnd = (playerPos.getX() + 64) >> 4;
-                int chunkZStart = (playerPos.getZ() - 64) >> 4;
-                int chunkZEnd = (playerPos.getZ() + 64) >> 4;
-
-                for (int cx = chunkXStart; cx <= chunkXEnd; cx++) {
-                    for (int cz = chunkZStart; cz <= chunkZEnd; cz++) {
-                        WorldChunk chunk = client.world.getChunk(cx, cz);
-                        if (chunk == null) continue;
-
-                        for (BlockPos pos : chunk.getBlockEntityPositions()) {
-                            int relX = Math.abs(pos.getX() - playerPos.getX());
-                            int relZ = Math.abs(pos.getZ() - playerPos.getZ());
-                            int relY = playerPos.getY() - pos.getY();
-
-                            if (relX <= 64 && relZ <= 64 && relY >= 0 && relY <= 64) {
-                                net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
-                                if (be instanceof net.minecraft.block.entity.ChestBlockEntity || 
-                                    be instanceof net.minecraft.block.entity.EnderChestBlockEntity) {
-                                    chestPositions.add(pos.toImmutable());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        WorldRenderEvents.LAST.register(context -> {
-            if (!active || chestPositions.isEmpty()) return;
-
-            MinecraftClient client = MinecraftClient.getInstance();
-            if (client.world == null) return;
-
-            MatrixStack matrices = context.matrixStack();
-            VertexConsumerProvider consumers = context.consumers();
-            Vec3d cameraPos = context.camera().getPos();
-            
-            VertexConsumer buffer = consumers.getBuffer(RenderLayer.getLines());
-
-            // Couleur de l'indicateur (Bleu clair : R=0, G=0.6, B=1)
-            float r = 0.0f;
-            float g = 0.6f;
-            float b = 1.0f;
-            float a = 1.0f;
-
-            for (BlockPos pos : chestPositions) {
-                matrices.push();
-                matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
-
-                drawBoxOutline(matrices, buffer, 0f, 0f, 0f, 1f, 1f, 1f, r, g, b, a);
-
-                matrices.pop();
-            }
-        });
-    }
-
-    // Dessine manuellement les lignes d'un cube en 3D
-    private static void drawBoxOutline(MatrixStack matrices, VertexConsumer buffer, float x1, float y1, float z1, float x2, float y2, float z2, float r, float g, float b, float a) {
-        org.joml.Matrix4f m = matrices.peek().getPositionMatrix();
-        
-        // Base du cube
-        buffer.vertex(m, x1, y1, z1).color(r, g, b, a).normal(1f, 0f, 0f); buffer.vertex(m, x2, y1, z1).color(r, g, b, a).normal(1f, 0f, 0f);
-        buffer.vertex(m, x2, y1, z1).color(r, g, b, a).normal(0f, 0f, 1f); buffer.vertex(m, x2, y1, z2).color(r, g, b, a).normal(0f, 0f, 1f);
-        buffer.vertex(m, x2, y1, z2).color(r, g, b, a).normal(-1f, 0f, 0f); buffer.vertex(m, x1, y1, z2).color(r, g, b, a).normal(-1f, 0f, 0f);
-        buffer.vertex(m, x1, y1, z2).color(r, g, b, a).normal(0f, 0f, -1f); buffer.vertex(m, x1, y1, z1).color(r, g, b, a).normal(0f, 0f, -1f);
-        
-        // Sommet du cube
-        buffer.vertex(m, x1, y2, z1).color(r, g, b, a).normal(1f, 0f, 0f); buffer.vertex(m, x2, y2, z1).color(r, g, b, a).normal(1f, 0f, 0f);
-        buffer.vertex(m, x2, y2, z1).color(r, g, b, a).normal(0f, 0f, 1f); buffer.vertex(m, x2, y2, z2).color(r, g, b, a).normal(0f, 0f, 1f);
-        buffer.vertex(m, x2, y2, z2).color(r, g, b, a).normal(-1f, 0f, 0f); buffer.vertex(m, x1, y2, z2).color(r, g, b, a).normal(-1f, 0f, 0f);
-        buffer.vertex(m, x1, y2, z2).color(r, g, b, a).normal(0f, 0f, -1f); buffer.vertex(m, x1, y2, z1).color(r, g, b, a).normal(0f, 0f, -1f);
-        
-        // Lignes verticales de liaison
-        buffer.vertex(m, x1, y1, z1).color(r, g, b, a).normal(0f, 1f, 0f); buffer.vertex(m, x1, y2, z1).color(r, g, b, a).normal(0f, 1f, 0f);
-        buffer.vertex(m, x2, y1, z1).color(r, g, b, a).normal(0f, 1f, 0f); buffer.vertex(m, x2, y2, z1).color(r, g, b, a).normal(0f, 1f, 0f);
-        buffer.vertex(m, x2, y1, z2).color(r, g, b, a).normal(0f, 1f, 0f); buffer.vertex(m, x2, y2, z2).color(r, g, b, a).normal(0f, 1f, 0f);
-        buffer.vertex(m, x1, y1, z2).color(r, g, b, a).normal(0f, 1f, 0f); buffer.vertex(m, x1, y2, z2).color(r, g, b, a).normal(0f, 1f, 0f);
-    }
-}
+                int chunkZStart =
