@@ -14,6 +14,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.util.Identifier;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
@@ -25,6 +26,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static boolean active = false;
     private static int scanTick = 0;
     private static final List<BlockPos> chestPositions = new ArrayList<>();
+    private static final Identifier BEAM_TEXTURE = Identifier.of("textures/entity/beacon_beam.png");
 
     @Override
     public void onInitializeClient() {
@@ -92,7 +94,7 @@ public class ChestTrackerClient implements ClientModInitializer {
 
             float[] blueColor = new float[]{0.0f, 0.4f, 1.0f};
             long worldTime = client.world.getTime();
-            float tickDelta = context.tickDelta();
+            float tickDelta = client.getRenderTickCounter().getTickDelta(true);
 
             MatrixStack matrices = context.matrixStack();
             VertexConsumerProvider consumers = context.consumers();
@@ -105,7 +107,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 BeaconBlockEntityRenderer.renderBeam(
                     matrices,
                     consumers,
-                    BeaconBlockEntityRenderer.BEACON_BEAM_TEXTURE,
+                    BEAM_TEXTURE,
                     tickDelta,
                     worldTime,
                     1,
