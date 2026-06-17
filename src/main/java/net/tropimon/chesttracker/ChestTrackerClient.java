@@ -1,4 +1,4 @@
-﻿package net.tropimon.chesttracker;
+package net.tropimon.chesttracker;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -113,7 +113,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                     blueColor
                 );
 
-                    matrices.pop();
+                matrices.pop();
             }
         });
     }
