@@ -11,6 +11,8 @@ base {
 }
 
 repositories {
+    maven { url "https://maven.fabricmc.net/" }
+    mavenCentral()
     maven { url "https://maven.cobblemon.com" }
 }
 
