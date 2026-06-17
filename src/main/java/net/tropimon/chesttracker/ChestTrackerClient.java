@@ -9,7 +9,8 @@ import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.client.render.VertexConsumerProvider;
-import net.minecraft.client.render.block.entity.BeaconBlockEntityRenderer;
+import net.minecraft.client.render.VertexConsumer;
+import net.minecraft.client.render.RenderLayer;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
@@ -90,32 +91,49 @@ public class ChestTrackerClient implements ClientModInitializer {
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.world == null) return;
 
-            // En 1.21, la couleur est un simple code de couleur (ici un bleu transparent)
-            int blueColor = 0xFF0066FF; 
-            long worldTime = client.world.getTime();
-            float tickDelta = client.getRenderTickCounter().getTickDelta(true);
-
             MatrixStack matrices = context.matrixStack();
             VertexConsumerProvider consumers = context.consumers();
             Vec3d cameraPos = context.camera().getPos();
+            
+            VertexConsumer buffer = consumers.getBuffer(RenderLayer.getLines());
+
+            // Couleur de l'indicateur (Bleu clair : R=0, G=0.6, B=1)
+            float r = 0.0f;
+            float g = 0.6f;
+            float b = 1.0f;
+            float a = 1.0f;
 
             for (BlockPos pos : chestPositions) {
                 matrices.push();
                 matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
 
-                // Version simplifiée à 7 paramètres imposée par Minecraft 1.21
-                BeaconBlockEntityRenderer.renderBeam(
-                    matrices,
-                    consumers,
-                    tickDelta,
-                    worldTime,
-                    1,
-                    256,
-                    blueColor
-                );
+                drawBoxOutline(matrices, buffer, 0f, 0f, 0f, 1f, 1f, 1f, r, g, b, a);
 
                 matrices.pop();
             }
         });
+    }
+
+    // Dessine manuellement les lignes d'un cube en 3D
+    private static void drawBoxOutline(MatrixStack matrices, VertexConsumer buffer, float x1, float y1, float z1, float x2, float y2, float z2, float r, float g, float b, float a) {
+        org.joml.Matrix4f m = matrices.peek().getPositionMatrix();
+        
+        // Base du cube
+        buffer.vertex(m, x1, y1, z1).color(r, g, b, a).normal(1f, 0f, 0f); buffer.vertex(m, x2, y1, z1).color(r, g, b, a).normal(1f, 0f, 0f);
+        buffer.vertex(m, x2, y1, z1).color(r, g, b, a).normal(0f, 0f, 1f); buffer.vertex(m, x2, y1, z2).color(r, g, b, a).normal(0f, 0f, 1f);
+        buffer.vertex(m, x2, y1, z2).color(r, g, b, a).normal(-1f, 0f, 0f); buffer.vertex(m, x1, y1, z2).color(r, g, b, a).normal(-1f, 0f, 0f);
+        buffer.vertex(m, x1, y1, z2).color(r, g, b, a).normal(0f, 0f, -1f); buffer.vertex(m, x1, y1, z1).color(r, g, b, a).normal(0f, 0f, -1f);
+        
+        // Sommet du cube
+        buffer.vertex(m, x1, y2, z1).color(r, g, b, a).normal(1f, 0f, 0f); buffer.vertex(m, x2, y2, z1).color(r, g, b, a).normal(1f, 0f, 0f);
+        buffer.vertex(m, x2, y2, z1).color(r, g, b, a).normal(0f, 0f, 1f); buffer.vertex(m, x2, y2, z2).color(r, g, b, a).normal(0f, 0f, 1f);
+        buffer.vertex(m, x2, y2, z2).color(r, g, b, a).normal(-1f, 0f, 0f); buffer.vertex(m, x1, y2, z2).color(r, g, b, a).normal(-1f, 0f, 0f);
+        buffer.vertex(m, x1, y2, z2).color(r, g, b, a).normal(0f, 0f, -1f); buffer.vertex(m, x1, y2, z1).color(r, g, b, a).normal(0f, 0f, -1f);
+        
+        // Lignes verticales de liaison
+        buffer.vertex(m, x1, y1, z1).color(r, g, b, a).normal(0f, 1f, 0f); buffer.vertex(m, x1, y2, z1).color(r, g, b, a).normal(0f, 1f, 0f);
+        buffer.vertex(m, x2, y1, z1).color(r, g, b, a).normal(0f, 1f, 0f); buffer.vertex(m, x2, y2, z1).color(r, g, b, a).normal(0f, 1f, 0f);
+        buffer.vertex(m, x2, y1, z2).color(r, g, b, a).normal(0f, 1f, 0f); buffer.vertex(m, x2, y2, z2).color(r, g, b, a).normal(0f, 1f, 0f);
+        buffer.vertex(m, x1, y1, z2).color(r, g, b, a).normal(0f, 1f, 0f); buffer.vertex(m, x1, y2, z2).color(r, g, b, a).normal(0f, 1f, 0f);
     }
 }
