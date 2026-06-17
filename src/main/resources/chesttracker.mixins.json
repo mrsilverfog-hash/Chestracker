@@ -1,0 +1,8 @@
+﻿{
+  "schemaVersion": 1,
+  "package": "net.tropimon.chesttracker.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [],
+  "client": [],
+  "injectors": { "defaultRequire": 1 }
+}

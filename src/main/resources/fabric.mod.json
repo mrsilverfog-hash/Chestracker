@@ -1,0 +1,13 @@
+﻿{
+  "schemaVersion": 1,
+  "id": "chesttracker",
+  "version": "${version}",
+  "name": "ChestTracker",
+  "description": "Affiche un rayon de beacon au-dessus des coffres.",
+  "authors": [ "Tropimon" ],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": { "client": [ "net.tropimon.chesttracker.ChestTrackerClient" ] },
+  "mixins": [ "chesttracker.mixins.json" ],
+  "depends": { "fabricloader": ">=0.15.11", "minecraft": "~1.21", "java": ">=21", "fabric-api": "*" }
+}
