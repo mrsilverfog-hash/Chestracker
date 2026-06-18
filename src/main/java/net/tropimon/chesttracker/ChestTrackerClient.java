@@ -27,6 +27,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static KeyBinding toggleKey;
     private static boolean active = false;
     private static int scanTick = 0;
+    private static int currentScanInterval = 60; // 3 secondes par défaut (3 * 20 ticks)
     
     private static final List<BlockPos> chestPositions = new ArrayList<>();
     private static final List<BlockPos> safariPositions = new ArrayList<>();
@@ -52,13 +53,15 @@ public class ChestTrackerClient implements ClientModInitializer {
                     synchronized (chestPositions) { chestPositions.clear(); }
                     synchronized (safariPositions) { safariPositions.clear(); }
                     synchronized (safariBallPositions) { safariBallPositions.clear(); }
+                    currentScanInterval = 60; // Réinitialise à 3 secondes
+                    scanTick = 0;
                 }
             }
 
             if (!active) return;
 
             scanTick++;
-            if (scanTick >= 100) { // Scan toutes les 5 secondes
+            if (scanTick >= currentScanInterval) {
                 scanTick = 0;
 
                 BlockPos playerPos = client.player.getBlockPos();
@@ -76,7 +79,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                         WorldChunk chunk = client.world.getChunk(cx, cz);
                         if (chunk == null) continue;
 
-                        // 1. SCAN DES COFFRES CLASSIQUES
+                        // 1. SCAN DES COFFRES CLASSIQUES (Rayons Bleus)
                         for (BlockPos pos : chunk.getBlockEntityPositions()) {
                             int relX = Math.abs(pos.getX() - playerPos.getX());
                             int relZ = Math.abs(pos.getZ() - playerPos.getZ());
@@ -100,7 +103,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                             }
                         }
 
-                        // 2. SCAN DES BLOCS SAFARI (SABLE, GRAVIER, BALLS)
+                        // 2. SCAN DES BLOCS SAFARI (SABLE, GRAVIER) (Rayons Rouges)
                         net.minecraft.world.chunk.ChunkSection[] sections = chunk.getSectionArray();
                         int bottomY = chunk.getBottomY();
                         for (int sIdx = 0; sIdx < sections.length; sIdx++) {
@@ -136,7 +139,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                                                 BlockPos targetPos = new BlockPos(absX, absY, absZ);
                                                 net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(targetPos);
                                                 
-                                                // On vérifie directement si le bloc contient encore du butin
                                                 if (combined.contains("ball")) {
                                                     if (!isSafariLooted(state, be, client)) {
                                                         tempSafariBallPos.add(targetPos.toImmutable());
@@ -168,6 +170,14 @@ public class ChestTrackerClient implements ClientModInitializer {
                 synchronized (safariBallPositions) {
                     safariBallPositions.clear();
                     safariBallPositions.addAll(tempSafariBallPos);
+                }
+
+                // Ajustement dynamique du temps d'attente
+                // Si le total des rayons bleus + rouges est supérieur ou égal à 3
+                if ((tempChestPos.size() + tempSafariPos.size()) >= 3) {
+                    currentScanInterval = 200; // Ralentit à 10 secondes (200 ticks)
+                } else {
+                    currentScanInterval = 60;  // Reste ou repasse à 3 secondes (60 ticks)
                 }
             }
         });
@@ -292,23 +302,17 @@ public class ChestTrackerClient implements ClientModInitializer {
         });
     }
 
-    // Fonction intelligente pour savoir si un bloc Safari n'a plus de loot
     private static boolean isSafariLooted(net.minecraft.block.BlockState state, net.minecraft.block.entity.BlockEntity be, MinecraftClient client) {
         if (client.player == null) return false;
         
         if (be != null) {
-            // 1. Si c'est géré par le système Lootr (par UUID)
             if (isChestOpened(be, client.player.getUuid())) return true;
-            
-            // 2. Si c'est un conteneur classique vide
             if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
                 if (lootable.getLootTable() == null && lootable.isEmpty()) return true;
             }
             if (be instanceof net.minecraft.inventory.Inventory inv) {
                 if (inv.isEmpty()) return true;
             }
-            
-            // 3. Réflexion sur les variables internes du mod (ex: "looted", "brushed", "empty")
             try {
                 Class<?> clazz = be.getClass();
                 while (clazz != null && clazz != Object.class) {
@@ -333,7 +337,6 @@ public class ChestTrackerClient implements ClientModInitializer {
             } catch (Exception ignored) {}
         }
         
-        // 4. Vérification des propriétés visuelles ou physiques du bloc (BlockState)
         if (state != null) {
             for (net.minecraft.state.property.Property<?> property : state.getProperties()) {
                 String propName = property.getName().toLowerCase();
