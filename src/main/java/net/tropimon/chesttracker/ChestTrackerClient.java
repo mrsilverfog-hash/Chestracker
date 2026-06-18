@@ -76,52 +76,83 @@ public class ChestTrackerClient implements ClientModInitializer {
                         WorldChunk chunk = client.world.getChunk(cx, cz);
                         if (chunk == null) continue;
 
+                        // 1. SCAN DES COFFRES (Via les Block Entities classiques)
                         for (BlockPos pos : chunk.getBlockEntityPositions()) {
                             int relX = Math.abs(pos.getX() - playerPos.getX());
                             int relZ = Math.abs(pos.getZ() - playerPos.getZ());
                             int relY = playerPos.getY() - pos.getY();
 
                             if (relX <= 64 && relZ <= 64 && relY >= 0 && relY <= 64) {
-                                net.minecraft.block.entity.BlockEntity be = chunk.getOriginalBlockEntity(pos);
-                                if (be == null) be = chunk.getBlockEntity(pos);
+                                net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
                                 if (be == null) continue;
                                 
-                                // Lecture directe du nom du bloc (méthode ultra fiable)
-                                String blockName = chunk.getBlockState(pos).getBlock().getName().getString().toLowerCase();
                                 String className = be.getClass().getName().toLowerCase();
-                                
-                                boolean isChestTarget = false;
-                                boolean isSafariTarget = false;
-                                boolean isSafariBallTarget = false;
-
-                                // Vérification par le nom du bloc
-                                if (blockName.contains("safari ball loot")) {
+                                if (className.contains("lootr") && (className.contains("chest") || className.contains("barrel"))) {
                                     if (!isChestOpened(be, client.player.getUuid())) {
-                                        isSafariBallTarget = true;
+                                        tempChestPos.add(pos.toImmutable());
                                     }
-                                } else if (blockName.contains("safari") && (blockName.contains("sable") || blockName.contains("gravier") || blockName.contains("suspect"))) {
-                                    if (!isChestOpened(be, client.player.getUuid())) {
-                                        isSafariTarget = true;
+                                } 
+                                else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
+                                    if (lootable.getLootTable() != null) {
+                                        tempChestPos.add(pos.toImmutable());
                                     }
                                 }
+                            }
+                        }
 
-                                // Si ce n'est pas un bloc Safari, on vérifie si c'est un coffre
-                                if (!isSafariTarget && !isSafariBallTarget) {
-                                    if (className.contains("lootr") && (className.contains("chest") || className.contains("barrel"))) {
-                                        if (!isChestOpened(be, client.player.getUuid())) {
-                                            isChestTarget = true;
-                                        }
-                                    } 
-                                    else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
-                                        if (lootable.getLootTable() != null) {
-                                            isChestTarget = true;
+                        // 2. SCAN ULTRA-PRÉCIS DES SECTIONS (Pour les blocs Safari classiques ou customs)
+                        net.minecraft.world.chunk.ChunkSection[] sections = chunk.getSectionArray();
+                        int bottomY = chunk.getBottomY();
+                        for (int sIdx = 0; sIdx < sections.length; sIdx++) {
+                            net.minecraft.world.chunk.ChunkSection section = sections[sIdx];
+                            if (section == null || section.isEmpty()) continue;
+                            
+                            int blockYBase = bottomY + (sIdx * 16);
+                            // Optimisation de hauteur pour éviter de scanner le vide inutilement
+                            if (blockYBase < playerPos.getY() - 64 || blockYBase > playerPos.getY() + 32) continue;
+                            
+                            for (int x = 0; x < 16; x++) {
+                                for (int z = 0; z < 16; z++) {
+                                    for (int y = 0; y < 16; y++) {
+                                        net.minecraft.block.BlockState state = section.getBlockState(x, y, z);
+                                        if (state.isAir()) continue;
+                                        
+                                        net.minecraft.block.Block block = state.getBlock();
+                                        String id = net.minecraft.registry.Registries.BLOCK.getId(block).toString().toLowerCase();
+                                        String key = block.getTranslationKey().toLowerCase();
+                                        String localized = block.getName().getString().toLowerCase();
+                                        
+                                        // On fusionne tout et on nettoie les espaces/tires pour une correspondance parfaite
+                                        String combined = (id + "|" + key + "|" + localized).replace("_", "").replace(" ", "");
+                                        
+                                        if (combined.contains("safari")) {
+                                            int absX = (cx << 4) + x;
+                                            int absY = blockYBase + y;
+                                            int absZ = (cz << 4) + z;
+                                            
+                                            int relX = Math.abs(absX - playerPos.getX());
+                                            int relZ = Math.abs(absZ - playerPos.getZ());
+                                            int relY = playerPos.getY() - absY;
+                                            
+                                            if (relX <= 64 && relZ <= 64 && relY >= 0 && relY <= 64) {
+                                                BlockPos targetPos = new BlockPos(absX, absY, absZ);
+                                                net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(targetPos);
+                                                
+                                                if (combined.contains("ball")) {
+                                                    if (be == null || !isChestOpened(be, client.player.getUuid())) {
+                                                        tempSafariBallPos.add(targetPos.toImmutable());
+                                                    }
+                                                } else if (combined.contains("sand") || combined.contains("sable") || 
+                                                           combined.contains("gravel") || combined.contains("gravier") || 
+                                                           combined.contains("suspect") || combined.contains("suspicious")) {
+                                                    if (be == null || !isChestOpened(be, client.player.getUuid())) {
+                                                        tempSafariPos.add(targetPos.toImmutable());
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
-
-                                if (isSafariBallTarget) tempSafariBallPos.add(pos.toImmutable());
-                                if (isSafariTarget) tempSafariPos.add(pos.toImmutable());
-                                if (isChestTarget) tempChestPos.add(pos.toImmutable());
                             }
                         }
                     }
@@ -163,16 +194,21 @@ public class ChestTrackerClient implements ClientModInitializer {
                         double distSq = client.player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
                         
                         if (distSq <= 36.0) { 
-                            net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                            String blockName = client.world.getBlockState(pos).getBlock().getName().getString().toLowerCase();
+                            net.minecraft.block.BlockState state = client.world.getBlockState(pos);
+                            net.minecraft.block.Block block = state.getBlock();
+                            String id = net.minecraft.registry.Registries.BLOCK.getId(block).toString().toLowerCase();
+                            String key = block.getTranslationKey().toLowerCase();
+                            String localized = block.getName().getString().toLowerCase();
+                            String combined = (id + "|" + key + "|" + localized).replace("_", "").replace(" ", "");
                             
-                            // Si le bloc n'existe plus ou a changé de nom -> désactivation directe
-                            if (be == null || !blockName.contains("safari ball loot")) { 
+                            // Si le bloc n'est plus un bloc Safari Ball -> Extinction immédiate
+                            if (!combined.contains("safari") || !combined.contains("ball")) { 
                                 iterator.remove(); 
                                 continue; 
                             }
                             
-                            if (isChestOpened(be, client.player.getUuid())) { 
+                            net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
+                            if (be != null && isChestOpened(be, client.player.getUuid())) { 
                                 iterator.remove(); 
                                 continue; 
                             }
@@ -197,16 +233,21 @@ public class ChestTrackerClient implements ClientModInitializer {
                         double distSq = client.player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
                         
                         if (distSq <= 36.0) { 
-                            net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                            String blockName = client.world.getBlockState(pos).getBlock().getName().getString().toLowerCase();
+                            net.minecraft.block.BlockState state = client.world.getBlockState(pos);
+                            net.minecraft.block.Block block = state.getBlock();
+                            String id = net.minecraft.registry.Registries.BLOCK.getId(block).toString().toLowerCase();
+                            String key = block.getTranslationKey().toLowerCase();
+                            String localized = block.getName().getString().toLowerCase();
+                            String combined = (id + "|" + key + "|" + localized).replace("_", "").replace(" ", "");
                             
-                            // Si brossé, il redevient du sable/gravier normal, donc le mot "safari" ou "suspect" disparaît
-                            if (be == null || !blockName.contains("safari")) { 
+                            // Si brossé (devient sable/gravier normal), le mot "safari" disparaît -> Désactivation
+                            if (!combined.contains("safari")) { 
                                 iterator.remove(); 
                                 continue; 
                             }
                             
-                            if (isChestOpened(be, client.player.getUuid())) { 
+                            net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
+                            if (be != null && isChestOpened(be, client.player.getUuid())) { 
                                 iterator.remove(); 
                                 continue; 
                             }
