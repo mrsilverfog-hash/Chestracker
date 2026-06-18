@@ -6,6 +6,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
@@ -58,7 +59,7 @@ public class ChestTrackerClient implements ClientModInitializer {
         WorldRenderEvents.LAST.register(context -> {
             if (!active || cachedBlocks.isEmpty()) return;
             MinecraftClient client = MinecraftClient.getInstance();
-            if (client.world == null) return;
+            if (client.world == null || client.player == null) return;
 
             Matrix4f viewMatrix = context.matrixStack().peek().getPositionMatrix();
             net.minecraft.util.math.Vec3d camPos = context.camera().getPos();
@@ -75,7 +76,10 @@ public class ChestTrackerClient implements ClientModInitializer {
 
             for (BlockPos pos : cachedBlocks) {
                 BlockState state = client.world.getBlockState(pos);
-                if (!isAvailable(state)) continue;
+                BlockEntity be = client.world.getBlockEntity(pos);
+                
+                // Vérification instantanée incluant Lootr
+                if (!isAvailable(state, be, client.player.getUuid().toString())) continue;
 
                 String path = Registries.BLOCK.getId(state.getBlock()).getPath();
                 float r, g, b;
@@ -84,13 +88,11 @@ public class ChestTrackerClient implements ClientModInitializer {
                 else if (path.contains("safari_ball")) { r = 0.0f; g = 1.0f; b = 0.0f; }
                 else { r = 1.0f; g = 0.0f; b = 0.0f; }
 
-                // 1. Dessiner le contour (Box)
                 context.matrixStack().push();
                 context.matrixStack().translate(pos.getX() - camPos.x, pos.getY() - camPos.y, pos.getZ() - camPos.z);
                 WorldRenderer.drawBox(context.matrixStack(), lineBuffer, 0, 0, 0, 1, 1, 1, r, g, b, 1.0f);
                 context.matrixStack().pop();
 
-                // 2. Dessiner le faisceau
                 Matrix4f matrix = new Matrix4f(viewMatrix);
                 matrix.translate((float)(pos.getX() - camPos.x), (float)(pos.getY() + 1.0 - camPos.y), (float)(pos.getZ() - camPos.z));
                 drawMinecraftBeaconBeam(tessellator, matrix, BEAM_HEIGHT, r, g, b, 0.5f);
@@ -110,14 +112,20 @@ public class ChestTrackerClient implements ClientModInitializer {
             
             if (path.equals("suspicious_safari_gravel") || path.equals("suspicious_safari_sand") || 
                 path.equals("safari_ball_loot") || path.contains("lootr")) {
-                if (isAvailable(state)) result.add(pos.toImmutable());
+                result.add(pos.toImmutable());
             }
         });
         return result;
     }
 
     @SuppressWarnings("unchecked")
-    private boolean isAvailable(BlockState state) {
+    private boolean isAvailable(BlockState state, BlockEntity be, String playerUuid) {
+        // Vérification Lootr
+        if (be != null && be.getClass().getName().toLowerCase().contains("lootr")) {
+            return !be.toString().contains(playerUuid);
+        }
+        
+        // Vérification standard
         Collection<Property<?>> properties = state.getProperties();
         for (Property<?> prop : properties) {
             String name = prop.getName();
@@ -130,11 +138,11 @@ public class ChestTrackerClient implements ClientModInitializer {
         return true;
     }
 
-    private void drawMinecraftBeaconBeam(Tessellator tessellator, Matrix4f matrix, float height, float r, float g, float b, float a) {
-        BufferBuilder builder = tessellator.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
+    private void drawMinecraftBeaconBeam(Tessellator t, Matrix4f m, float h, float r, float g, float b, float a) {
+        BufferBuilder builder = t.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
         float min = 0.2f, max = 0.8f;
-        addFace(builder, matrix, min, max, 0, height, r, g, b, a, true);
-        addFace(builder, matrix, min, max, 0, height, r, g, b, a, false);
+        addFace(builder, m, min, max, 0, h, r, g, b, a, true);
+        addFace(builder, m, min, max, 0, h, r, g, b, a, false);
         BufferRenderer.drawWithGlobalProgram(builder.end());
     }
 
