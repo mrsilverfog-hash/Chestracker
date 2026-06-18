@@ -95,7 +95,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                                         int absZ = (cz << 4) + z;
                                         BlockPos targetPos = new BlockPos(absX, absY, absZ);
                                         
-                                        // Lecture en direct sur le monde (aligné sur WTHIT)
                                         net.minecraft.block.BlockState state = client.world.getBlockState(targetPos);
                                         if (state == null || state.isAir()) continue;
                                         
@@ -191,3 +190,112 @@ public class ChestTrackerClient implements ClientModInitializer {
                         iterator.remove(); 
                         continue; 
                     }
+                    
+                    matrices.push();
+                    matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
+                    WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, rR, gR, bR, aR);
+                    WorldRenderer.drawBox(matrices, buffer, 0.4, 1.0, 0.4, 0.6, 300.0, 0.6, rR, gR, bR, aR);
+                    matrices.pop();
+                }
+            }
+
+            // --- 3. Balises BLEUES (Coffres Lootr) ---
+            float rB = 0.0f; float gB = 0.6f; float bB = 1.0f; float aB = 1.0f;
+            synchronized (chestPositions) {
+                Iterator<BlockPos> iterator = chestPositions.iterator();
+                while (iterator.hasNext()) {
+                    BlockPos pos = iterator.next();
+                    net.minecraft.block.BlockState state = client.world.getBlockState(pos);
+                    net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
+                    
+                    if (state == null || state.isAir() || be == null || isChestOpened(be, client.player.getUuid())) { 
+                        iterator.remove(); 
+                        continue; 
+                    }
+                    
+                    matrices.push();
+                    matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
+                    WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, rB, gB, bB, aB);
+                    WorldRenderer.drawBox(matrices, buffer, 0.4, 1.0, 0.4, 0.6, 300.0, 0.6, rB, gB, bB, aB);
+                    matrices.pop();
+                }
+            }
+        });
+    }
+
+    private static boolean isSafariLooted(net.minecraft.block.BlockState state, net.minecraft.block.entity.BlockEntity be, String id) {
+        if (state == null || state.isAir()) return true;
+
+        if (id.contains("_e") || id.contains("empty") || id.contains("looted")) {
+            return true;
+        }
+
+        for (net.minecraft.state.property.Property<?> property : state.getProperties()) {
+            String propName = property.getName().toLowerCase();
+            Object value = state.get(property);
+            if (value == null) continue;
+            String valStr = value.toString().toLowerCase();
+            
+            if (propName.equals("looted") && valStr.equals("true")) return true;
+            if (propName.contains("empty") || propName.contains("cleared") || propName.contains("taken")) {
+                if (valStr.equals("true")) return true;
+            }
+            if (propName.equals("dusted") || propName.equals("brushed") || propName.equals("stage")) {
+                if (valStr.equals("3")) return true;
+            }
+        }
+
+        if (be != null) {
+            if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
+                if (lootable.getLootTable() == null && lootable.isEmpty()) return true;
+            }
+            if (be instanceof net.minecraft.inventory.Inventory inv) {
+                if (inv.isEmpty()) return true;
+            }
+
+            try {
+                Class<?> clazz = be.getClass();
+                while (clazz != null && clazz != Object.class) {
+                    for (java.lang.reflect.Field field : clazz.getDeclaredFields()) {
+                        field.setAccessible(true);
+                        String name = field.getName().toLowerCase();
+                        Object val = field.get(be);
+                        if (val == null) continue;
+                        
+                        if (name.contains("looted") || name.contains("empty") || name.contains("brushed") || name.contains("hasloot")) {
+                            if (val instanceof Boolean) {
+                                boolean boolVal = (Boolean) val;
+                                if (name.contains("hasloot")) return !boolVal;
+                                return boolVal;
+                            }
+                            if (val instanceof Integer && (Integer) val >= 3) return true;
+                        }
+                    }
+                    clazz = clazz.getSuperclass();
+                }
+            } catch (Exception ignored) {}
+        }
+
+        return false;
+    }
+
+    private static boolean isChestOpened(net.minecraft.block.entity.BlockEntity be, java.util.UUID playerUuid) {
+        if (be == null || playerUuid == null) return false;
+        String uuidStr = playerUuid.toString();
+        try {
+            Class<?> clazz = be.getClass();
+            while (clazz != null && clazz != Object.class) {
+                for (java.lang.reflect.Field field : clazz.getDeclaredFields()) {
+                    try {
+                        field.setAccessible(true);
+                        Object val = field.get(be);
+                        if (val == null) continue;
+                        if (val.toString().contains(uuidStr)) { return true; }
+                    } catch (Exception ignored) {}
+                }
+                clazz = clazz.getSuperclass();
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+}
