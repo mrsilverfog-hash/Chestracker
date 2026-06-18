@@ -52,7 +52,7 @@ public class ChestTrackerClient implements ClientModInitializer {
             if (!active) return;
 
             scanTick++;
-            if (scanTick >= 80) { // Fixé à 80 ticks (4 secondes)
+            if (scanTick >= 80) { // Scan toutes les 4 secondes
                 scanTick = 0;
                 chestPositions.clear();
 
@@ -75,9 +75,22 @@ public class ChestTrackerClient implements ClientModInitializer {
 
                             if (relX <= 64 && relZ <= 64 && relY >= 0 && relY <= 64) {
                                 net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
-                                if (be instanceof net.minecraft.block.entity.ChestBlockEntity || 
-                                    be instanceof net.minecraft.block.entity.EnderChestBlockEntity) {
-                                    chestPositions.add(pos.toImmutable());
+                                
+                                // Filtre les conteneurs de type Butin (gère Coffres et Tonneaux)
+                                if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
+                                    boolean isLoot = lootable.getLootTable() != null;
+                                    
+                                    // Vérification par nom si le serveur utilise des conteneurs renommés
+                                    if (!isLoot && lootable.hasCustomName() && lootable.getDisplayName() != null) {
+                                        String name = lootable.getDisplayName().getString().toLowerCase();
+                                        if (name.contains("butin")) {
+                                            isLoot = true;
+                                        }
+                                    }
+                                    
+                                    if (isLoot) {
+                                        chestPositions.add(pos.toImmutable());
+                                    }
                                 }
                             }
                         }
@@ -107,6 +120,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 matrices.push();
                 matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
 
+                // Dessine la boîte autour du bloc ciblé
                 WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, r, g, b, a);
 
                 matrices.pop();
