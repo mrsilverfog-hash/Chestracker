@@ -61,7 +61,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 trackedBlocks = scanWorld(client.world, client.player.getBlockPos());
             }
 
-            // Clic droit : suppression manuelle uniquement pour Lootr (Coffres/Tonneaux)
+            // Clic droit : suppression manuelle UNIQUEMENT pour Coffres et Tonneaux (Lootr)
             if (client.options.useKey.isPressed()) {
                 HitResult hit = client.crosshairTarget;
                 if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
@@ -97,10 +97,11 @@ public class ChestTrackerClient implements ClientModInitializer {
                 String path = Registries.BLOCK.getId(entry.getValue().getBlock()).getPath();
                 BlockState currentState = client.world.getBlockState(pos);
 
-                // 1. Si Lootr et dans la liste manuelle -> masquer
+                // 1. Si Coffre/Tonneau et dans la liste manuelle -> masquer
                 if (path.contains("lootr") && manualIgnoreList.contains(pos)) continue;
 
-                // 2. Si l'état du bloc a changé (Sable/Gravier/Tonneau) -> masquer
+                // 2. Si l'état du bloc a changé (Sable/Gravier/Tonneau/Safari Ball) -> masquer
+                // C'est ici que la magie opère pour la Safari Ball : dès que le bloc change, il disparaît.
                 if (!currentState.equals(entry.getValue())) continue;
 
                 float r = path.contains("lootr") ? 0.0f : (path.contains("safari_ball") ? 0.0f : 1.0f);
