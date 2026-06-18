@@ -80,11 +80,33 @@ public class ChestTrackerClient implements ClientModInitializer {
                                 boolean isTarget = false;
                                 String className = be.getClass().getName().toLowerCase();
 
-                                // Détection Lootr
-                                if (className.contains("lootr")) {
+                                // Détection Lootr : UNIQUEMENT les coffres (chest) et tonneaux (barrel)
+                                if (className.contains("lootr") && (className.contains("chest") || className.contains("barrel"))) {
                                     isTarget = true;
+                                    
+                                    // Vérifie si ton joueur a déjà ouvert ce coffre Lootr
+                                    try {
+                                        java.util.UUID playerUuid = client.player.getUuid();
+                                        Class<?> clazz = be.getClass();
+                                        while (clazz != null && clazz != Object.class) {
+                                            for (java.lang.reflect.Field field : clazz.getDeclaredFields()) {
+                                                try {
+                                                    field.setAccessible(true);
+                                                    Object val = field.get(be);
+                                                    if (val instanceof java.util.Collection<?> col) {
+                                                        if (col.contains(playerUuid)) {
+                                                            isTarget = false; // Déjà ouvert !
+                                                            break;
+                                                        }
+                                                    }
+                                                } catch (Exception ignored) {}
+                                            }
+                                            if (!isTarget) break;
+                                            clazz = clazz.getSuperclass();
+                                        }
+                                    } catch (Exception ignored) {}
                                 } 
-                                // Détection classique
+                                // Détection des blocs de butin classiques de Minecraft (hors mod Lootr)
                                 else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
                                     if (lootable.getLootTable() != null) {
                                         isTarget = true;
