@@ -32,7 +32,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static final int SCAN_INTERVAL = 100;
     
     private static Map<BlockPos, BlockState> trackedBlocks = new HashMap<>();
-    private static Set<BlockPos> openedBlocks = new HashSet<>();
+    private static Set<BlockPos> manualIgnoreList = new HashSet<>(); 
     private static final int BEAM_HEIGHT = 256;
 
     @Override
@@ -49,26 +49,26 @@ public class ChestTrackerClient implements ClientModInitializer {
                 client.inGameHud.setTitle(Text.literal(active ? "§aScanner : ACTIVÉ" : "§cScanner : DÉSACTIVÉ"));
                 if (!active) {
                     trackedBlocks.clear();
-                    openedBlocks.clear();
+                    manualIgnoreList.clear();
                 }
             }
 
             if (!active) return;
 
-            // Scan automatique périodique
             scanTick++;
             if (scanTick >= SCAN_INTERVAL) {
                 scanTick = 0;
                 trackedBlocks = scanWorld(client.world, client.player.getBlockPos());
             }
 
-            // Clic droit pour supprimer manuellement le rayon d'un bloc visé
+            // Clic droit : suppression manuelle uniquement pour Lootr (Coffres/Tonneaux)
             if (client.options.useKey.isPressed()) {
                 HitResult hit = client.crosshairTarget;
                 if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
                     BlockPos targetPos = ((BlockHitResult) hit).getBlockPos();
-                    if (trackedBlocks.containsKey(targetPos)) {
-                        openedBlocks.add(targetPos);
+                    String path = Registries.BLOCK.getId(client.world.getBlockState(targetPos).getBlock()).getPath();
+                    if (path.contains("lootr")) {
+                        manualIgnoreList.add(targetPos);
                     }
                 }
             }
@@ -94,19 +94,15 @@ public class ChestTrackerClient implements ClientModInitializer {
 
             for (Map.Entry<BlockPos, BlockState> entry : trackedBlocks.entrySet()) {
                 BlockPos pos = entry.getKey();
-                
-                // Ignorer si déjà ouvert manuellement
-                if (openedBlocks.contains(pos)) continue;
-
+                String path = Registries.BLOCK.getId(entry.getValue().getBlock()).getPath();
                 BlockState currentState = client.world.getBlockState(pos);
-                
-                // Ignorer si l'état a changé (cas des tonneaux qui changent de texture)
-                if (!currentState.equals(entry.getValue())) {
-                    openedBlocks.add(pos);
-                    continue;
-                }
 
-                String path = Registries.BLOCK.getId(currentState.getBlock()).getPath();
+                // 1. Si Lootr et dans la liste manuelle -> masquer
+                if (path.contains("lootr") && manualIgnoreList.contains(pos)) continue;
+
+                // 2. Si l'état du bloc a changé (Sable/Gravier/Tonneau) -> masquer
+                if (!currentState.equals(entry.getValue())) continue;
+
                 float r = path.contains("lootr") ? 0.0f : (path.contains("safari_ball") ? 0.0f : 1.0f);
                 float g = path.contains("lootr") ? 0.6f : (path.contains("safari_ball") ? 1.0f : 0.0f);
                 float b = path.contains("lootr") ? 1.0f : (path.contains("safari_ball") ? 0.0f : 0.0f);
