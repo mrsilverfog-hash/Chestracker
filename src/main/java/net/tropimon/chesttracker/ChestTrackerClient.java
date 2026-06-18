@@ -76,7 +76,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                         WorldChunk chunk = client.world.getChunk(cx, cz);
                         if (chunk == null) continue;
 
-                        // 1. SCAN DES COFFRES
+                        // 1. SCAN DES COFFRES CLASSIQUES
                         for (BlockPos pos : chunk.getBlockEntityPositions()) {
                             int relX = Math.abs(pos.getX() - playerPos.getX());
                             int relZ = Math.abs(pos.getZ() - playerPos.getZ());
@@ -100,7 +100,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                             }
                         }
 
-                        // 2. SCAN DES SECTIONS POUR LES BLOCS SAFARI
+                        // 2. SCAN DES BLOCS SAFARI (SABLE, GRAVIER, BALLS)
                         net.minecraft.world.chunk.ChunkSection[] sections = chunk.getSectionArray();
                         int bottomY = chunk.getBottomY();
                         for (int sIdx = 0; sIdx < sections.length; sIdx++) {
@@ -136,14 +136,15 @@ public class ChestTrackerClient implements ClientModInitializer {
                                                 BlockPos targetPos = new BlockPos(absX, absY, absZ);
                                                 net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(targetPos);
                                                 
+                                                // On vérifie directement si le bloc contient encore du butin
                                                 if (combined.contains("ball")) {
-                                                    if (be == null || !isChestOpened(be, client.player.getUuid())) {
+                                                    if (!isSafariLooted(state, be, client)) {
                                                         tempSafariBallPos.add(targetPos.toImmutable());
                                                     }
                                                 } else if (combined.contains("sand") || combined.contains("sable") || 
                                                            combined.contains("gravel") || combined.contains("gravier") || 
                                                            combined.contains("suspect") || combined.contains("suspicious")) {
-                                                    if (be == null || !isChestOpened(be, client.player.getUuid())) {
+                                                    if (!isSafariLooted(state, be, client)) {
                                                         tempSafariPos.add(targetPos.toImmutable());
                                                     }
                                                 }
@@ -205,7 +206,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                             }
                             
                             net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                            if (be != null && isChestOpened(be, client.player.getUuid())) { 
+                            if (isSafariLooted(state, be, client)) { 
                                 iterator.remove(); 
                                 continue; 
                             }
@@ -229,59 +230,4 @@ public class ChestTrackerClient implements ClientModInitializer {
                         BlockPos pos = iterator.next();
                         double distSq = client.player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
                         
-                        if (distSq <= 36.0) { 
-                            net.minecraft.block.BlockState state = client.world.getBlockState(pos);
-                            net.minecraft.block.Block block = state.getBlock();
-                            String id = net.minecraft.registry.Registries.BLOCK.getId(block).toString().toLowerCase();
-                            String key = block.getTranslationKey().toLowerCase();
-                            String localized = block.getName().getString().toLowerCase();
-                            String combined = (id + "|" + key + "|" + localized).replace("_", "").replace(" ", "");
-                            
-                            if (!combined.contains("safari")) { 
-                                iterator.remove(); 
-                                continue; 
-                            }
-                            
-                            net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                            if (be != null && isChestOpened(be, client.player.getUuid())) { 
-                                iterator.remove(); 
-                                continue; 
-                            }
-                        }
-                        
-                        matrices.push();
-                        matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
-                        // Ligne de contour du bloc retirée ici pour laisser la place à ton ressource pack
-                        WorldRenderer.drawBox(matrices, buffer, 0.4, 1.0, 0.4, 0.6, 300.0, 0.6, rR, gR, bR, aR);
-                        matrices.pop();
-                    }
-                }
-            }
-
-            // --- 3. Balises BLEUES (Coffres/Tonneaux) ---
-            float rB = 0.0f; float gB = 0.6f; float bB = 1.0f; float aB = 1.0f;
-            synchronized (chestPositions) {
-                if (!chestPositions.isEmpty()) {
-                    Iterator<BlockPos> iterator = chestPositions.iterator();
-                    while (iterator.hasNext()) {
-                        BlockPos pos = iterator.next();
-                        double distSq = client.player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
-                        
-                        if (distSq <= 36.0) { 
-                            net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                            if (be == null) { iterator.remove(); continue; }
-                            
-                            boolean opened = false;
-                            String className = be.getClass().getName().toLowerCase();
-                            if (className.contains("lootr") && (className.contains("chest") || className.contains("barrel"))) {
-                                if (isChestOpened(be, client.player.getUuid())) opened = true;
-                            } else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
-                                if (lootable.getLootTable() == null) opened = true;
-                            }
-                            if (opened) { iterator.remove(); continue; }
-                        }
-                        
-                        matrices.push();
-                        matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
-                        WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, rB, gB, bB, aB);
-                        WorldRenderer.draw
+                        if (distSq <= 36.0) {
