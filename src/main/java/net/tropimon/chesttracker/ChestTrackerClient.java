@@ -11,6 +11,7 @@ import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.render.*;
 import net.minecraft.registry.Registries;
+import net.minecraft.state.property.Property;
 import net.minecraft.text.Text;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
@@ -19,9 +20,10 @@ import net.minecraft.world.World;
 import org.lwjgl.glfw.GLFW;
 import org.joml.Matrix4f;
 
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
-import java.util.Map;
+import java.util.List;
 import java.util.Set;
 
 public class ChestTrackerClient implements ClientModInitializer {
@@ -31,8 +33,8 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static int scanTick = 0;
     private static final int SCAN_INTERVAL = 100;
     
-    private static Map<BlockPos, BlockState> trackedBlocks = new HashMap<>();
-    private static Set<BlockPos> manualIgnoreList = new HashSet<>(); 
+    private static List<BlockPos> cachedBlocks = new ArrayList<>();
+    private static Set<BlockPos> manualIgnoreList = new HashSet<>();
     private static final int BEAM_HEIGHT = 256;
 
     @Override
@@ -43,25 +45,23 @@ public class ChestTrackerClient implements ClientModInitializer {
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null || client.world == null) return;
-            
             while (toggleKey.wasPressed()) {
                 active = !active;
                 client.inGameHud.setTitle(Text.literal(active ? "§aScanner : ACTIVÉ" : "§cScanner : DÉSACTIVÉ"));
                 if (!active) {
-                    trackedBlocks.clear();
+                    cachedBlocks.clear();
                     manualIgnoreList.clear();
                 }
             }
-
             if (!active) return;
 
             scanTick++;
             if (scanTick >= SCAN_INTERVAL) {
                 scanTick = 0;
-                trackedBlocks = scanWorld(client.world, client.player.getBlockPos());
+                cachedBlocks = findAvailableBlocks(client.world, client.player.getBlockPos());
             }
 
-            // Clic droit : suppression manuelle UNIQUEMENT pour Coffres et Tonneaux (Lootr)
+            // Gestion clic droit UNIQUEMENT pour les Lootr
             if (client.options.useKey.isPressed()) {
                 HitResult hit = client.crosshairTarget;
                 if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
@@ -75,7 +75,7 @@ public class ChestTrackerClient implements ClientModInitializer {
         });
 
         WorldRenderEvents.LAST.register(context -> {
-            if (!active || trackedBlocks.isEmpty()) return;
+            if (!active || cachedBlocks.isEmpty()) return;
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.world == null) return;
 
@@ -92,21 +92,20 @@ public class ChestTrackerClient implements ClientModInitializer {
 
             Tessellator tessellator = Tessellator.getInstance();
 
-            for (Map.Entry<BlockPos, BlockState> entry : trackedBlocks.entrySet()) {
-                BlockPos pos = entry.getKey();
-                String path = Registries.BLOCK.getId(entry.getValue().getBlock()).getPath();
-                BlockState currentState = client.world.getBlockState(pos);
+            for (BlockPos pos : cachedBlocks) {
+                BlockState state = client.world.getBlockState(pos);
+                String path = Registries.BLOCK.getId(state.getBlock()).getPath();
 
-                // 1. Si Coffre/Tonneau et dans la liste manuelle -> masquer
+                // Exclusion manuelle pour les Lootr cliqués
                 if (path.contains("lootr") && manualIgnoreList.contains(pos)) continue;
 
-                // 2. Si l'état du bloc a changé (Sable/Gravier/Tonneau/Safari Ball) -> masquer
-                // C'est ici que la magie opère pour la Safari Ball : dès que le bloc change, il disparaît.
-                if (!currentState.equals(entry.getValue())) continue;
+                // Logique automatique pour tout le reste
+                if (!isAvailable(state)) continue;
 
-                float r = path.contains("lootr") ? 0.0f : (path.contains("safari_ball") ? 0.0f : 1.0f);
-                float g = path.contains("lootr") ? 0.6f : (path.contains("safari_ball") ? 1.0f : 0.0f);
-                float b = path.contains("lootr") ? 1.0f : (path.contains("safari_ball") ? 0.0f : 0.0f);
+                float r, g, b;
+                if (path.contains("lootr")) { r = 0.0f; g = 0.6f; b = 1.0f; }
+                else if (path.contains("safari_ball")) { r = 0.0f; g = 1.0f; b = 0.0f; }
+                else { r = 1.0f; g = 0.0f; b = 0.0f; }
 
                 context.matrixStack().push();
                 context.matrixStack().translate(pos.getX() - camPos.x, pos.getY() - camPos.y, pos.getZ() - camPos.z);
@@ -124,23 +123,38 @@ public class ChestTrackerClient implements ClientModInitializer {
         });
     }
 
-    private Map<BlockPos, BlockState> scanWorld(World world, BlockPos center) {
-        Map<BlockPos, BlockState> result = new HashMap<>();
+    private List<BlockPos> findAvailableBlocks(World world, BlockPos center) {
+        List<BlockPos> result = new ArrayList<>();
         BlockPos.iterate(center.add(-50, -50, -50), center.add(50, 50, 50)).forEach(pos -> {
             BlockState state = world.getBlockState(pos);
             String path = Registries.BLOCK.getId(state.getBlock()).getPath();
-            if (path.contains("lootr") || path.contains("safari_ball") || path.contains("suspicious")) {
-                result.put(pos.toImmutable(), state);
+            if (path.equals("suspicious_safari_gravel") || path.equals("suspicious_safari_sand") || 
+                path.equals("safari_ball_loot") || path.contains("lootr")) {
+                if (isAvailable(state)) result.add(pos.toImmutable());
             }
         });
         return result;
     }
 
-    private void drawMinecraftBeaconBeam(Tessellator t, Matrix4f m, float h, float r, float g, float b, float a) {
-        BufferBuilder builder = t.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
+    @SuppressWarnings("unchecked")
+    private boolean isAvailable(BlockState state) {
+        Collection<Property<?>> properties = state.getProperties();
+        for (Property<?> prop : properties) {
+            String name = prop.getName();
+            if (name.equals("available") || name.equals("looted")) {
+                Comparable<?> value = state.get((Property) prop);
+                if (name.equals("available")) return Boolean.TRUE.equals(value);
+                if (name.equals("looted")) return !Boolean.TRUE.equals(value);
+            }
+        }
+        return true;
+    }
+
+    private void drawMinecraftBeaconBeam(Tessellator tessellator, Matrix4f matrix, float height, float r, float g, float b, float a) {
+        BufferBuilder builder = tessellator.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
         float min = 0.2f, max = 0.8f;
-        addFace(builder, m, min, max, 0, h, r, g, b, a, true);
-        addFace(builder, m, min, max, 0, h, r, g, b, a, false);
+        addFace(builder, matrix, min, max, 0, height, r, g, b, a, true);
+        addFace(builder, matrix, min, max, 0, height, r, g, b, a, false);
         BufferRenderer.drawWithGlobalProgram(builder.end());
     }
 
