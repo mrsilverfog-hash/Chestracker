@@ -28,7 +28,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static KeyBinding toggleKey;
     private static boolean active = false;
     private static int scanTick = 0;
-    private static final int SCAN_INTERVAL = 100; // 5 secondes pour rafraîchir la liste globale
+    private static final int SCAN_INTERVAL = 100;
     
     private static List<BlockPos> cachedBlocks = new ArrayList<>();
     private static final int BEAM_HEIGHT = 256;
@@ -62,6 +62,7 @@ public class ChestTrackerClient implements ClientModInitializer {
 
             Matrix4f viewMatrix = context.matrixStack().peek().getPositionMatrix();
             net.minecraft.util.math.Vec3d camPos = context.camera().getPos();
+            VertexConsumer lineBuffer = context.consumers().getBuffer(RenderLayer.getLines());
 
             RenderSystem.setShader(GameRenderer::getPositionColorProgram);
             RenderSystem.enableBlend();
@@ -73,19 +74,26 @@ public class ChestTrackerClient implements ClientModInitializer {
             Tessellator tessellator = Tessellator.getInstance();
 
             for (BlockPos pos : cachedBlocks) {
-                // VÉRIFICATION INSTANTANÉE : Si le bloc n'est plus "disponible", on saute ce tour de rendu
                 BlockState state = client.world.getBlockState(pos);
-                if (!isAvailable(state)) continue; 
+                if (!isAvailable(state)) continue;
 
                 String path = Registries.BLOCK.getId(state.getBlock()).getPath();
                 float r, g, b;
-                if (path.contains("lootr")) { r = 0.0f; g = 0.6f; b = 1.0f; } 
-                else if (path.contains("safari_ball")) { r = 0.0f; g = 1.0f; b = 0.0f; } 
+                
+                if (path.contains("lootr")) { r = 0.0f; g = 0.6f; b = 1.0f; }
+                else if (path.contains("safari_ball")) { r = 0.0f; g = 1.0f; b = 0.0f; }
                 else { r = 1.0f; g = 0.0f; b = 0.0f; }
 
+                // 1. Dessiner le contour (Box)
+                context.matrixStack().push();
+                context.matrixStack().translate(pos.getX() - camPos.x, pos.getY() - camPos.y, pos.getZ() - camPos.z);
+                WorldRenderer.drawBox(context.matrixStack(), lineBuffer, 0, 0, 0, 1, 1, 1, r, g, b, 1.0f);
+                context.matrixStack().pop();
+
+                // 2. Dessiner le faisceau
                 Matrix4f matrix = new Matrix4f(viewMatrix);
                 matrix.translate((float)(pos.getX() - camPos.x), (float)(pos.getY() + 1.0 - camPos.y), (float)(pos.getZ() - camPos.z));
-                drawMinecraftBeaconBeam(tessellator, matrix, BEAM_HEIGHT, r, g, b, 0.7f);
+                drawMinecraftBeaconBeam(tessellator, matrix, BEAM_HEIGHT, r, g, b, 0.5f);
             }
 
             RenderSystem.enableCull();
@@ -99,6 +107,7 @@ public class ChestTrackerClient implements ClientModInitializer {
         BlockPos.iterate(center.add(-50, -50, -50), center.add(50, 50, 50)).forEach(pos -> {
             BlockState state = world.getBlockState(pos);
             String path = Registries.BLOCK.getId(state.getBlock()).getPath();
+            
             if (path.equals("suspicious_safari_gravel") || path.equals("suspicious_safari_sand") || 
                 path.equals("safari_ball_loot") || path.contains("lootr")) {
                 if (isAvailable(state)) result.add(pos.toImmutable());
@@ -121,12 +130,12 @@ public class ChestTrackerClient implements ClientModInitializer {
         return true;
     }
 
-    private void drawMinecraftBeaconBeam(Tessellator t, Matrix4f m, float h, float r, float g, float b, float a) {
-        BufferBuilder b = t.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
+    private void drawMinecraftBeaconBeam(Tessellator tessellator, Matrix4f matrix, float height, float r, float g, float b, float a) {
+        BufferBuilder builder = tessellator.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
         float min = 0.2f, max = 0.8f;
-        addFace(b, m, min, max, 0, h, r, g, b, a, true);
-        addFace(b, m, min, max, 0, h, r, g, b, a, false);
-        BufferRenderer.drawWithGlobalProgram(b.end());
+        addFace(builder, matrix, min, max, 0, height, r, g, b, a, true);
+        addFace(builder, matrix, min, max, 0, height, r, g, b, a, false);
+        BufferRenderer.drawWithGlobalProgram(builder.end());
     }
 
     private void addFace(BufferBuilder b, Matrix4f m, float min, float max, float hMin, float hMax, float r, float g, float bl, float a, boolean h) {
