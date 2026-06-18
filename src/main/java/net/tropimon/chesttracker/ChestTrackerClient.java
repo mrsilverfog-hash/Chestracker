@@ -76,7 +76,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                         WorldChunk chunk = client.world.getChunk(cx, cz);
                         if (chunk == null) continue;
 
-                        // 1. SCAN DES COFFRES (Via les Block Entities classiques)
+                        // 1. SCAN DES COFFRES
                         for (BlockPos pos : chunk.getBlockEntityPositions()) {
                             int relX = Math.abs(pos.getX() - playerPos.getX());
                             int relZ = Math.abs(pos.getZ() - playerPos.getZ());
@@ -100,7 +100,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                             }
                         }
 
-                        // 2. SCAN ULTRA-PRÉCIS DES SECTIONS (Pour les blocs Safari classiques ou customs)
+                        // 2. SCAN DES SECTIONS POUR LES BLOCS SAFARI
                         net.minecraft.world.chunk.ChunkSection[] sections = chunk.getSectionArray();
                         int bottomY = chunk.getBottomY();
                         for (int sIdx = 0; sIdx < sections.length; sIdx++) {
@@ -108,7 +108,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                             if (section == null || section.isEmpty()) continue;
                             
                             int blockYBase = bottomY + (sIdx * 16);
-                            // Optimisation de hauteur pour éviter de scanner le vide inutilement
                             if (blockYBase < playerPos.getY() - 64 || blockYBase > playerPos.getY() + 32) continue;
                             
                             for (int x = 0; x < 16; x++) {
@@ -122,7 +121,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                                         String key = block.getTranslationKey().toLowerCase();
                                         String localized = block.getName().getString().toLowerCase();
                                         
-                                        // On fusionne tout et on nettoie les espaces/tires pour une correspondance parfaite
                                         String combined = (id + "|" + key + "|" + localized).replace("_", "").replace(" ", "");
                                         
                                         if (combined.contains("safari")) {
@@ -201,7 +199,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                             String localized = block.getName().getString().toLowerCase();
                             String combined = (id + "|" + key + "|" + localized).replace("_", "").replace(" ", "");
                             
-                            // Si le bloc n'est plus un bloc Safari Ball -> Extinction immédiate
                             if (!combined.contains("safari") || !combined.contains("ball")) { 
                                 iterator.remove(); 
                                 continue; 
@@ -240,7 +237,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                             String localized = block.getName().getString().toLowerCase();
                             String combined = (id + "|" + key + "|" + localized).replace("_", "").replace(" ", "");
                             
-                            // Si brossé (devient sable/gravier normal), le mot "safari" disparaît -> Désactivation
                             if (!combined.contains("safari")) { 
                                 iterator.remove(); 
                                 continue; 
@@ -255,7 +251,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                         
                         matrices.push();
                         matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
-                        WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, rR, gR, bR, aR);
+                        // Ligne de contour du bloc retirée ici pour laisser la place à ton ressource pack
                         WorldRenderer.drawBox(matrices, buffer, 0.4, 1.0, 0.4, 0.6, 300.0, 0.6, rR, gR, bR, aR);
                         matrices.pop();
                     }
@@ -288,31 +284,4 @@ public class ChestTrackerClient implements ClientModInitializer {
                         matrices.push();
                         matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
                         WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, rB, gB, bB, aB);
-                        WorldRenderer.drawBox(matrices, buffer, 0.4, 1.0, 0.4, 0.6, 300.0, 0.6, rB, gB, bB, aB);
-                        matrices.pop();
-                    }
-                }
-            }
-        });
-    }
-
-    private static boolean isChestOpened(net.minecraft.block.entity.BlockEntity be, java.util.UUID playerUuid) {
-        if (be == null || playerUuid == null) return false;
-        String uuidStr = playerUuid.toString();
-        try {
-            Class<?> clazz = be.getClass();
-            while (clazz != null && clazz != Object.class) {
-                for (java.lang.reflect.Field field : clazz.getDeclaredFields()) {
-                    try {
-                        field.setAccessible(true);
-                        Object val = field.get(be);
-                        if (val == null) continue;
-                        if (val.toString().contains(uuidStr)) { return true; }
-                    } catch (Exception ignored) {}
-                }
-                clazz = clazz.getSuperclass();
-            }
-        } catch (Exception ignored) {}
-        return false;
-    }
-}
+                        WorldRenderer.draw
