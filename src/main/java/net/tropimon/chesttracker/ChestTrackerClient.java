@@ -28,7 +28,6 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static boolean active = false;
     private static int scanTick = 0;
     
-    // Listes pour chaque type de balise
     private static final List<BlockPos> chestPositions = new ArrayList<>();
     private static final List<BlockPos> safariPositions = new ArrayList<>();
     private static final List<BlockPos> safariBallPositions = new ArrayList<>();
@@ -83,33 +82,30 @@ public class ChestTrackerClient implements ClientModInitializer {
                             int relY = playerPos.getY() - pos.getY();
 
                             if (relX <= 64 && relZ <= 64 && relY >= 0 && relY <= 64) {
-                                net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
+                                net.minecraft.block.entity.BlockEntity be = chunk.getOriginalBlockEntity(pos);
+                                if (be == null) be = chunk.getBlockEntity(pos);
                                 if (be == null) continue;
+                                
+                                // Lecture directe du nom du bloc (méthode ultra fiable)
+                                String blockName = chunk.getBlockState(pos).getBlock().getName().getString().toLowerCase();
+                                String className = be.getClass().getName().toLowerCase();
                                 
                                 boolean isChestTarget = false;
                                 boolean isSafariTarget = false;
                                 boolean isSafariBallTarget = false;
-                                String className = be.getClass().getName().toLowerCase();
 
-                                // Vérification du nom du bloc (Safari et Safari Ball)
-                                if (be instanceof net.minecraft.util.Nameable nameable) {
-                                    Text dispNameText = nameable.getDisplayName();
-                                    if (dispNameText != null) {
-                                        String dispName = dispNameText.getString().toLowerCase();
-                                        
-                                        if (dispName.contains("safari ball loot")) {
-                                            if (!isChestOpened(be, client.player.getUuid())) {
-                                                isSafariBallTarget = true;
-                                            }
-                                        } else if (dispName.contains("safari") && (dispName.contains("sable suspect") || dispName.contains("gravier suspect"))) {
-                                            if (!isChestOpened(be, client.player.getUuid())) {
-                                                isSafariTarget = true;
-                                            }
-                                        }
+                                // Vérification par le nom du bloc
+                                if (blockName.contains("safari ball loot")) {
+                                    if (!isChestOpened(be, client.player.getUuid())) {
+                                        isSafariBallTarget = true;
+                                    }
+                                } else if (blockName.contains("safari") && (blockName.contains("sable") || blockName.contains("gravier") || blockName.contains("suspect"))) {
+                                    if (!isChestOpened(be, client.player.getUuid())) {
+                                        isSafariTarget = true;
                                     }
                                 }
 
-                                // Si ce n'est pas un bloc Safari, on regarde si c'est un coffre/tonneau
+                                // Si ce n'est pas un bloc Safari, on vérifie si c'est un coffre
                                 if (!isSafariTarget && !isSafariBallTarget) {
                                     if (className.contains("lootr") && (className.contains("chest") || className.contains("barrel"))) {
                                         if (!isChestOpened(be, client.player.getUuid())) {
@@ -168,17 +164,18 @@ public class ChestTrackerClient implements ClientModInitializer {
                         
                         if (distSq <= 36.0) { 
                             net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                            if (be == null) { iterator.remove(); continue; }
+                            String blockName = client.world.getBlockState(pos).getBlock().getName().getString().toLowerCase();
                             
-                            boolean opened = false;
-                            if (be instanceof net.minecraft.util.Nameable nameable) {
-                                Text dispNameText = nameable.getDisplayName();
-                                if (dispNameText == null || !dispNameText.getString().toLowerCase().contains("safari ball loot")) {
-                                    opened = true;
-                                }
+                            // Si le bloc n'existe plus ou a changé de nom -> désactivation directe
+                            if (be == null || !blockName.contains("safari ball loot")) { 
+                                iterator.remove(); 
+                                continue; 
                             }
-                            if (!opened && isChestOpened(be, client.player.getUuid())) { opened = true; }
-                            if (opened) { iterator.remove(); continue; }
+                            
+                            if (isChestOpened(be, client.player.getUuid())) { 
+                                iterator.remove(); 
+                                continue; 
+                            }
                         }
                         
                         matrices.push();
@@ -201,17 +198,18 @@ public class ChestTrackerClient implements ClientModInitializer {
                         
                         if (distSq <= 36.0) { 
                             net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                            if (be == null) { iterator.remove(); continue; }
+                            String blockName = client.world.getBlockState(pos).getBlock().getName().getString().toLowerCase();
                             
-                            boolean opened = false;
-                            if (be instanceof net.minecraft.util.Nameable nameable) {
-                                Text dispNameText = nameable.getDisplayName();
-                                if (dispNameText == null || !dispNameText.getString().toLowerCase().contains("safari")) {
-                                    opened = true;
-                                }
+                            // Si brossé, il redevient du sable/gravier normal, donc le mot "safari" ou "suspect" disparaît
+                            if (be == null || !blockName.contains("safari")) { 
+                                iterator.remove(); 
+                                continue; 
                             }
-                            if (!opened && isChestOpened(be, client.player.getUuid())) { opened = true; }
-                            if (opened) { iterator.remove(); continue; }
+                            
+                            if (isChestOpened(be, client.player.getUuid())) { 
+                                iterator.remove(); 
+                                continue; 
+                            }
                         }
                         
                         matrices.push();
