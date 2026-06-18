@@ -119,4 +119,22 @@ public class ChestTrackerClient implements ClientModInitializer {
             VertexConsumer buffer = consumers.getBuffer(RenderLayer.getLines());
 
             float r = 0.0f;
-            float g = 0
+            float g = 0.6f;
+            float b = 1.0f;
+            float a = 1.0f;
+
+            for (BlockPos pos : chestPositions) {
+                matrices.push();
+                matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
+
+                // 1. Dessine la boîte autour du coffre
+                WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, r, g, b, a);
+                
+                // 2. Dessine le rayon vertical (balise) qui monte vers le ciel
+                WorldRenderer.drawBox(matrices, buffer, 0.4, 1.0, 0.4, 0.6, 300.0, 0.6, r, g, b, a);
+
+                matrices.pop();
+            }
+        });
+    }
+}
