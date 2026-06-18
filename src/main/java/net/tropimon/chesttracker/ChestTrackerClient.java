@@ -27,7 +27,6 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static KeyBinding toggleKey;
     private static boolean active = false;
     private static int scanTick = 0;
-    // Liste sécurisée pour éviter les bugs entre l'affichage et le scan
     private static final List<BlockPos> chestPositions = new ArrayList<>();
 
     @Override
@@ -56,7 +55,7 @@ public class ChestTrackerClient implements ClientModInitializer {
             if (!active) return;
 
             scanTick++;
-            if (scanTick >= 100) { // Scan de zone toutes les 5 secondes (100 ticks)
+            if (scanTick >= 100) { // Scan de zone toutes les 5 secondes
                 scanTick = 0;
 
                 BlockPos playerPos = client.player.getBlockPos();
@@ -84,13 +83,11 @@ public class ChestTrackerClient implements ClientModInitializer {
                                 boolean isTarget = false;
                                 String className = be.getClass().getName().toLowerCase();
 
-                                // Vérification Lootr (uniquement au moment du scan global)
                                 if (className.contains("lootr") && (className.contains("chest") || className.contains("barrel"))) {
                                     if (!isChestOpened(be, client.player.getUuid())) {
                                         isTarget = true;
                                     }
                                 } 
-                                // Vérification Minecraft classique
                                 else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
                                     if (lootable.getLootTable() != null) {
                                         isTarget = true;
@@ -105,7 +102,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                     }
                 }
 
-                // Met à jour la liste principale proprement
                 synchronized (chestPositions) {
                     chestPositions.clear();
                     chestPositions.addAll(tempPositions);
@@ -136,10 +132,9 @@ public class ChestTrackerClient implements ClientModInitializer {
                 while (iterator.hasNext()) {
                     BlockPos pos = iterator.next();
                     
-                    // Calcul de la distance avec le joueur
-                    double distSq = client.player.getSquaredDistance(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+                    // Correction ici : utilisation de squaredDistanceTo
+                    double distSq = client.player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
                     
-                    // SI LE JOUEUR EST PROCHE (Moins de 6 blocs), on vérifie s'il l'a ouvert
                     if (distSq <= 36.0) { 
                         net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
                         if (be == null) {
@@ -160,14 +155,12 @@ public class ChestTrackerClient implements ClientModInitializer {
                             }
                         }
 
-                        // Si ouvert, on retire de la liste immédiatement et on n'affiche rien
                         if (opened) {
                             iterator.remove();
                             continue;
                         }
                     }
 
-                    // Affichage de la balise (Très léger pour le PC si pas de calcul)
                     matrices.push();
                     matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
                     WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, r, g, b, a);
@@ -178,7 +171,6 @@ public class ChestTrackerClient implements ClientModInitializer {
         });
     }
 
-    // Analyse de la mémoire du coffre
     private static boolean isChestOpened(net.minecraft.block.entity.BlockEntity be, java.util.UUID playerUuid) {
         if (be == null || playerUuid == null) return false;
         String uuidStr = playerUuid.toString();
