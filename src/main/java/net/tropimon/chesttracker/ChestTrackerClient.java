@@ -27,7 +27,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static KeyBinding toggleKey;
     private static boolean active = false;
     private static int scanTick = 0;
-    private static int currentScanInterval = 60; 
+    private static final int SCAN_INTERVAL = 30; // Scan plus rapide pour actualiser dès qu'un objet est pris
     
     private static final List<BlockPos> chestPositions = new ArrayList<>();
     private static final List<BlockPos> safariPositions = new ArrayList<>();
@@ -53,26 +53,14 @@ public class ChestTrackerClient implements ClientModInitializer {
                     synchronized (chestPositions) { chestPositions.clear(); }
                     synchronized (safariPositions) { safariPositions.clear(); }
                     synchronized (safariBallPositions) { safariBallPositions.clear(); }
-                    currentScanInterval = 60;
                     scanTick = 0;
                 }
             }
 
             if (!active) return;
 
-            int totalRayons = 0;
-            synchronized (chestPositions) { totalRayons += chestPositions.size(); }
-            synchronized (safariPositions) { totalRayons += safariPositions.size(); }
-            synchronized (safariBallPositions) { totalRayons += safariBallPositions.size(); }
-
-            if (totalRayons >= 3) {
-                currentScanInterval = 120; 
-            } else {
-                currentScanInterval = 40;  
-            }
-
             scanTick++;
-            if (scanTick >= currentScanInterval) {
+            if (scanTick >= SCAN_INTERVAL) {
                 scanTick = 0;
 
                 BlockPos playerPos = client.player.getBlockPos();
@@ -80,51 +68,17 @@ public class ChestTrackerClient implements ClientModInitializer {
                 List<BlockPos> tempSafariPos = new ArrayList<>();
                 List<BlockPos> tempSafariBallPos = new ArrayList<>();
 
-                int chunkXStart = (playerPos.getX() - 64) >> 4;
-                int chunkXEnd = (playerPos.getX() + 64) >> 4;
-                int chunkZStart = (playerPos.getZ() - 64) >> 4;
-                int chunkZEnd = (playerPos.getZ() + 64) >> 4;
+                int chunkXStart = (playerPos.getX() - 48) >> 4;
+                int chunkXEnd = (playerPos.getX() + 48) >> 4;
+                int chunkZStart = (playerPos.getZ() - 48) >> 4;
+                int chunkZEnd = (playerPos.getZ() + 48) >> 4;
 
                 for (int cx = chunkXStart; cx <= chunkXEnd; cx++) {
                     for (int cz = chunkZStart; cz <= chunkZEnd; cz++) {
                         WorldChunk chunk = client.world.getChunk(cx, cz);
                         if (chunk == null) continue;
 
-                        // 1. Recherche des Blocs à Entités (Coffres Lootr / Safari Ball Loot)
-                        for (BlockPos pos : chunk.getBlockEntityPositions()) {
-                            int relX = Math.abs(pos.getX() - playerPos.getX());
-                            int relZ = Math.abs(pos.getZ() - playerPos.getZ());
-                            int relY = playerPos.getY() - pos.getY();
-
-                            if (relX <= 64 && relZ <= 64 && relY >= -32 && relY <= 64) {
-                                net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
-                                if (be == null) continue;
-                                
-                                String className = be.getClass().getName().toLowerCase();
-                                net.minecraft.block.BlockState state = chunk.getBlockState(pos);
-                                String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString().toLowerCase();
-
-                                // Vérification spécifique pour la boule Safari
-                                if (blockId.contains("safari_ball_loot") || className.contains("safariball")) {
-                                    if (!isSafariLooted(state, be, client)) {
-                                        tempSafariBallPos.add(pos.toImmutable());
-                                    }
-                                } 
-                                // Vérification pour les coffres Lootr / Coffres classiques
-                                else if (className.contains("lootr") && (className.contains("chest") || className.contains("barrel"))) {
-                                    if (!isChestOpened(be, client.player.getUuid())) {
-                                        tempChestPos.add(pos.toImmutable());
-                                    }
-                                } 
-                                else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
-                                    if (lootable.getLootTable() != null) {
-                                        tempChestPos.add(pos.toImmutable());
-                                    }
-                                }
-                            }
-                        }
-
-                        // 2. Recherche des blocs de sable et gravier suspects (sans BlockEntity obligatoire)
+                        // 1. Recherche des blocs via les sections de Chunk (Sable, Gravier et Safari Ball)
                         net.minecraft.world.chunk.ChunkSection[] sections = chunk.getSectionArray();
                         int bottomY = chunk.getBottomY();
                         for (int sIdx = 0; sIdx < sections.length; sIdx++) {
@@ -132,7 +86,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                             if (section == null || section.isEmpty()) continue;
                             
                             int blockYBase = bottomY + (sIdx * 16);
-                            if (blockYBase < playerPos.getY() - 64 || blockYBase > playerPos.getY() + 64) continue;
+                            if (blockYBase < playerPos.getY() - 40 || blockYBase > playerPos.getY() + 40) continue;
                             
                             for (int x = 0; x < 16; x++) {
                                 for (int z = 0; z < 16; z++) {
@@ -142,37 +96,46 @@ public class ChestTrackerClient implements ClientModInitializer {
                                         
                                         String id = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString().toLowerCase();
                                         
-                                        if (id.contains("suspicious_safari_sand") || id.contains("suspicious_safari_gravel")) {
+                                        if (id.contains("safari")) {
                                             int absX = (cx << 4) + x;
                                             int absY = blockYBase + y;
                                             int absZ = (cz << 4) + z;
-                                            
                                             BlockPos targetPos = new BlockPos(absX, absY, absZ);
+                                            
                                             net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(targetPos);
                                             
-                                            if (!isSafariLooted(state, be, client)) {
-                                                tempSafariPos.add(targetPos.toImmutable());
+                                            if (id.contains("ball")) {
+                                                if (!isSafariLooted(state, be, client)) {
+                                                    tempSafariBallPos.add(targetPos.toImmutable());
+                                                }
+                                            } else if (id.contains("sand") || id.contains("gravel")) {
+                                                if (!isSafariLooted(state, be, client)) {
+                                                    tempSafariPos.add(targetPos.toImmutable());
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
                         }
+
+                        // 2. Recherche des conteneurs Lootr classiques
+                        for (BlockPos pos : chunk.getBlockEntityPositions()) {
+                            net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
+                            if (be == null) continue;
+                            String className = be.getClass().getName().toLowerCase();
+                            if (className.contains("lootr") && (className.contains("chest") || className.contains("barrel"))) {
+                                if (!isChestOpened(be, client.player.getUuid())) {
+                                    tempChestPos.add(pos.toImmutable());
+                                }
+                            }
+                        }
                     }
                 }
 
-                synchronized (chestPositions) {
-                    chestPositions.clear();
-                    chestPositions.addAll(tempChestPos);
-                }
-                synchronized (safariPositions) {
-                    safariPositions.clear();
-                    safariPositions.addAll(tempSafariPos);
-                }
-                synchronized (safariBallPositions) {
-                    safariBallPositions.clear();
-                    safariBallPositions.addAll(tempSafariBallPos);
-                }
+                synchronized (chestPositions) { chestPositions.clear(); chestPositions.addAll(tempChestPos); }
+                synchronized (safariPositions) { safariPositions.clear(); safariPositions.addAll(tempSafariPos); }
+                synchronized (safariBallPositions) { safariBallPositions.clear(); safariBallPositions.addAll(tempSafariBallPos); }
             }
         });
 
@@ -194,10 +157,12 @@ public class ChestTrackerClient implements ClientModInitializer {
                 while (iterator.hasNext()) {
                     BlockPos pos = iterator.next();
                     net.minecraft.block.BlockState state = client.world.getBlockState(pos);
-                    if (state == null || state.isAir()) { iterator.remove(); continue; }
-                    
                     net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                    if (isSafariLooted(state, be, client)) { iterator.remove(); continue; }
+                    
+                    if (state == null || state.isAir() || isSafariLooted(state, be, client)) { 
+                        iterator.remove(); 
+                        continue; 
+                    }
                     
                     matrices.push();
                     matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
@@ -214,10 +179,12 @@ public class ChestTrackerClient implements ClientModInitializer {
                 while (iterator.hasNext()) {
                     BlockPos pos = iterator.next();
                     net.minecraft.block.BlockState state = client.world.getBlockState(pos);
-                    if (state == null || state.isAir()) { iterator.remove(); continue; }
-                    
                     net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                    if (isSafariLooted(state, be, client)) { iterator.remove(); continue; }
+                    
+                    if (state == null || state.isAir() || isSafariLooted(state, be, client)) { 
+                        iterator.remove(); 
+                        continue; 
+                    }
                     
                     matrices.push();
                     matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
@@ -227,26 +194,19 @@ public class ChestTrackerClient implements ClientModInitializer {
                 }
             }
 
-            // --- 3. Balises BLEUES (Coffres de Butin Lootr) ---
+            // --- 3. Balises BLEUES (Coffres Lootr) ---
             float rB = 0.0f; float gB = 0.6f; float bB = 1.0f; float aB = 1.0f;
             synchronized (chestPositions) {
                 Iterator<BlockPos> iterator = chestPositions.iterator();
                 while (iterator.hasNext()) {
                     BlockPos pos = iterator.next();
                     net.minecraft.block.BlockState state = client.world.getBlockState(pos);
-                    if (state == null || state.isAir()) { iterator.remove(); continue; }
-                    
                     net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                    boolean opened = false;
-                    if (be != null) {
-                        String className = be.getClass().getName().toLowerCase();
-                        if (className.contains("lootr")) {
-                            if (isChestOpened(be, client.player.getUuid())) opened = true;
-                        } else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
-                            if (lootable.getLootTable() == null) opened = true;
-                        }
+                    
+                    if (state == null || state.isAir() || be == null || isChestOpened(be, client.player.getUuid())) { 
+                        iterator.remove(); 
+                        continue; 
                     }
-                    if (opened) { iterator.remove(); continue; }
                     
                     matrices.push();
                     matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
@@ -259,25 +219,25 @@ public class ChestTrackerClient implements ClientModInitializer {
     }
 
     private static boolean isSafariLooted(net.minecraft.block.BlockState state, net.minecraft.block.entity.BlockEntity be, MinecraftClient client) {
-        if (state == null) return false;
+        if (state == null || state.isAir()) return true;
 
-        // 1. Analyse des propriétés BlockState (système de brossage de Minecraft)
+        // 1. Analyse complète des propriétés du BlockState (Vérification de l'état vide ou complété)
         for (net.minecraft.state.property.Property<?> property : state.getProperties()) {
             String propName = property.getName().toLowerCase();
             Object value = state.get(property);
             if (value == null) continue;
             String valStr = value.toString().toLowerCase();
             
-            // Si le niveau de brossage/dusted est à 3 (stade final), le bloc est vide
+            // Si une propriété indique explicitement que c'est vide ou brossé au max
+            if (propName.contains("empty") || propName.contains("looted") || propName.contains("cleared")) {
+                if (valStr.equals("true")) return true;
+            }
             if (propName.equals("dusted") || propName.equals("brushed") || propName.equals("stage")) {
                 if (valStr.equals("3")) return true;
             }
-            if (propName.contains("looted") || propName.contains("empty")) {
-                if (valStr.equals("true")) return true;
-            }
         }
 
-        // 2. Analyse de la BlockEntity (si vide ou déjà fouillé)
+        // 2. Détection par l'inventaire ou la disparition de la BlockEntity
         if (be != null) {
             if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
                 if (lootable.getLootTable() == null && lootable.isEmpty()) return true;
@@ -285,7 +245,8 @@ public class ChestTrackerClient implements ClientModInitializer {
             if (be instanceof net.minecraft.inventory.Inventory inv) {
                 if (inv.isEmpty()) return true;
             }
-            // Secours par réflexion au cas où le mod utilise des variables cachées
+
+            // Extraction par réflexion pour trouver les variables "_e" / "empty" / "looted" cachées
             try {
                 Class<?> clazz = be.getClass();
                 while (clazz != null && clazz != Object.class) {
@@ -295,15 +256,25 @@ public class ChestTrackerClient implements ClientModInitializer {
                         Object val = field.get(be);
                         if (val == null) continue;
                         
-                        if (name.contains("looted") || name.contains("empty") || name.contains("brushed")) {
-                            if (val instanceof Boolean && (Boolean) val) return true;
-                            if (val instanceof Integer && (Integer) val >= 3) return true;
+                        if (name.contains("empty") || name.contains("looted") || name.contains("hasloot")) {
+                            if (val instanceof Boolean) {
+                                boolean boolVal = (Boolean) val;
+                                if (name.contains("hasloot")) return !boolVal;
+                                return boolVal;
+                            }
                         }
                     }
                     clazz = clazz.getSuperclass();
                 }
             } catch (Exception ignored) {}
+        } else {
+            // Si c'est un bloc qui requiert normalement une BlockEntity (comme la boule) et qu'il n'y en a plus, il est vide
+            String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString().toLowerCase();
+            if (blockId.contains("ball")) {
+                return true;
+            }
         }
+
         return false;
     }
 
