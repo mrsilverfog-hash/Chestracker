@@ -6,7 +6,6 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.block.BlockState;
-import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
@@ -20,8 +19,9 @@ import org.lwjgl.glfw.GLFW;
 import org.joml.Matrix4f;
 
 import java.util.ArrayList;
-import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class ChestTrackerClient implements ClientModInitializer {
 
@@ -30,7 +30,8 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static int scanTick = 0;
     private static final int SCAN_INTERVAL = 100;
     
-    private static List<BlockPos> cachedBlocks = new ArrayList<>();
+    // On stocke la position ET l'état du bloc pour comparer
+    private static Map<BlockPos, BlockState> trackedBlocks = new HashMap<>();
     private static final int BEAM_HEIGHT = 256;
 
     @Override
@@ -44,21 +45,21 @@ public class ChestTrackerClient implements ClientModInitializer {
             while (toggleKey.wasPressed()) {
                 active = !active;
                 client.inGameHud.setTitle(Text.literal(active ? "§aScanner : ACTIVÉ" : "§cScanner : DÉSACTIVÉ"));
-                if (!active) cachedBlocks.clear();
+                if (!active) trackedBlocks.clear();
             }
             if (!active) return;
 
             scanTick++;
             if (scanTick >= SCAN_INTERVAL) {
                 scanTick = 0;
-                cachedBlocks = findAvailableBlocks(client.world, client.player.getBlockPos());
+                trackedBlocks = scanWorld(client.world, client.player.getBlockPos());
             }
         });
 
         WorldRenderEvents.LAST.register(context -> {
-            if (!active || cachedBlocks.isEmpty()) return;
+            if (!active || trackedBlocks.isEmpty()) return;
             MinecraftClient client = MinecraftClient.getInstance();
-            if (client.world == null || client.player == null) return;
+            if (client.world == null) return;
 
             Matrix4f viewMatrix = context.matrixStack().peek().getPositionMatrix();
             net.minecraft.util.math.Vec3d camPos = context.camera().getPos();
@@ -73,16 +74,17 @@ public class ChestTrackerClient implements ClientModInitializer {
 
             Tessellator tessellator = Tessellator.getInstance();
 
-            for (BlockPos pos : cachedBlocks) {
-                BlockState state = client.world.getBlockState(pos);
-                if (!isAvailable(state)) continue;
+            for (Map.Entry<BlockPos, BlockState> entry : trackedBlocks.entrySet()) {
+                BlockPos pos = entry.getKey();
+                BlockState currentState = client.world.getBlockState(pos);
 
-                String path = Registries.BLOCK.getId(state.getBlock()).getPath();
-                float r, g, b;
-                
-                if (path.contains("lootr")) { r = 0.0f; g = 0.6f; b = 1.0f; }
-                else if (path.contains("safari_ball")) { r = 0.0f; g = 1.0f; b = 0.0f; }
-                else { r = 1.0f; g = 0.0f; b = 0.0f; }
+                // COMPARISON : Si l'état actuel est différent de l'état scanné (ex: couleur changée), on ignore
+                if (!currentState.equals(entry.getValue())) continue;
+
+                String path = Registries.BLOCK.getId(currentState.getBlock()).getPath();
+                float r = path.contains("lootr") ? 0.0f : (path.contains("safari_ball") ? 0.0f : 1.0f);
+                float g = path.contains("lootr") ? 0.6f : (path.contains("safari_ball") ? 1.0f : 0.0f);
+                float b = path.contains("lootr") ? 1.0f : (path.contains("safari_ball") ? 0.0f : 0.0f);
 
                 context.matrixStack().push();
                 context.matrixStack().translate(pos.getX() - camPos.x, pos.getY() - camPos.y, pos.getZ() - camPos.z);
@@ -100,31 +102,16 @@ public class ChestTrackerClient implements ClientModInitializer {
         });
     }
 
-    private List<BlockPos> findAvailableBlocks(World world, BlockPos center) {
-        List<BlockPos> result = new ArrayList<>();
+    private Map<BlockPos, BlockState> scanWorld(World world, BlockPos center) {
+        Map<BlockPos, BlockState> result = new HashMap<>();
         BlockPos.iterate(center.add(-50, -50, -50), center.add(50, 50, 50)).forEach(pos -> {
             BlockState state = world.getBlockState(pos);
             String path = Registries.BLOCK.getId(state.getBlock()).getPath();
-            if (path.equals("suspicious_safari_gravel") || path.equals("suspicious_safari_sand") || 
-                path.equals("safari_ball_loot") || path.contains("lootr")) {
-                result.add(pos.toImmutable());
+            if (path.contains("lootr") || path.contains("safari_ball") || path.contains("suspicious")) {
+                result.put(pos.toImmutable(), state);
             }
         });
         return result;
-    }
-
-    private boolean isAvailable(BlockState state) {
-        Collection<Property<?>> properties = state.getProperties();
-        for (Property<?> prop : properties) {
-            String name = prop.getName();
-            // On vérifie tous les états possibles d'ouverture/loot
-            if (name.equals("available") || name.equals("looted") || name.equals("open")) {
-                Comparable<?> value = state.get((Property) prop);
-                if (name.equals("available") || name.equals("open")) return Boolean.TRUE.equals(value);
-                if (name.equals("looted")) return !Boolean.TRUE.equals(value);
-            }
-        }
-        return true;
     }
 
     private void drawMinecraftBeaconBeam(Tessellator t, Matrix4f m, float h, float r, float g, float b, float a) {
