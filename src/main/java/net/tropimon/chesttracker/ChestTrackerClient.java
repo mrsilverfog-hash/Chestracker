@@ -19,6 +19,7 @@ import net.minecraft.world.chunk.WorldChunk;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 public class ChestTrackerClient implements ClientModInitializer {
@@ -26,6 +27,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static KeyBinding toggleKey;
     private static boolean active = false;
     private static int scanTick = 0;
+    // Liste sécurisée pour éviter les bugs entre l'affichage et le scan
     private static final List<BlockPos> chestPositions = new ArrayList<>();
 
     @Override
@@ -45,18 +47,20 @@ public class ChestTrackerClient implements ClientModInitializer {
                 client.inGameHud.setTitleTicks(0, 20, 0);
                 client.inGameHud.setTitle(Text.literal(active ? "§aScanner : ACTIVÉ" : "§cScanner : DÉSACTIVÉ"));
                 if (!active) {
-                    chestPositions.clear();
+                    synchronized (chestPositions) {
+                        chestPositions.clear();
+                    }
                 }
             }
 
             if (!active) return;
 
             scanTick++;
-            if (scanTick >= 80) { // Scan toutes les 4 secondes
+            if (scanTick >= 100) { // Scan de zone toutes les 5 secondes (100 ticks)
                 scanTick = 0;
-                chestPositions.clear();
 
                 BlockPos playerPos = client.player.getBlockPos();
+                List<BlockPos> tempPositions = new ArrayList<>();
 
                 int chunkXStart = (playerPos.getX() - 64) >> 4;
                 int chunkXEnd = (playerPos.getX() + 64) >> 4;
@@ -80,36 +84,37 @@ public class ChestTrackerClient implements ClientModInitializer {
                                 boolean isTarget = false;
                                 String className = be.getClass().getName().toLowerCase();
 
-                                // Détection Lootr : UNIQUEMENT les coffres et tonneaux non fouillés
+                                // Vérification Lootr (uniquement au moment du scan global)
                                 if (className.contains("lootr") && (className.contains("chest") || className.contains("barrel"))) {
                                     if (!isChestOpened(be, client.player.getUuid())) {
                                         isTarget = true;
                                     }
                                 } 
-                                // Détection des blocs de butin classiques de Minecraft
+                                // Vérification Minecraft classique
                                 else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
                                     if (lootable.getLootTable() != null) {
                                         isTarget = true;
-                                    } else if (lootable.hasCustomName() && lootable.getDisplayName() != null) {
-                                        String name = lootable.getDisplayName().getString().toLowerCase();
-                                        if (name.contains("butin")) {
-                                            isTarget = true;
-                                        }
                                     }
                                 }
 
                                 if (isTarget) {
-                                    chestPositions.add(pos.toImmutable());
+                                    tempPositions.add(pos.toImmutable());
                                 }
                             }
                         }
                     }
                 }
+
+                // Met à jour la liste principale proprement
+                synchronized (chestPositions) {
+                    chestPositions.clear();
+                    chestPositions.addAll(tempPositions);
+                }
             }
         });
 
         WorldRenderEvents.LAST.register(context -> {
-            if (!active || chestPositions.isEmpty()) return;
+            if (!active) return;
 
             MinecraftClient client = MinecraftClient.getInstance();
             if (client.world == null || client.player == null) return;
@@ -117,7 +122,6 @@ public class ChestTrackerClient implements ClientModInitializer {
             MatrixStack matrices = context.matrixStack();
             VertexConsumerProvider consumers = context.consumers();
             Vec3d cameraPos = context.camera().getPos();
-            
             VertexConsumer buffer = consumers.getBuffer(RenderLayer.getLines());
 
             float r = 0.0f;
@@ -125,30 +129,59 @@ public class ChestTrackerClient implements ClientModInitializer {
             float b = 1.0f;
             float a = 1.0f;
 
-            for (BlockPos pos : chestPositions) {
-                // Vérification en temps réel pour éteindre le rayon INSTANTANÉMENT à l'ouverture
-                net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
-                if (be != null && isChestOpened(be, client.player.getUuid())) {
-                    continue;
+            synchronized (chestPositions) {
+                if (chestPositions.isEmpty()) return;
+
+                Iterator<BlockPos> iterator = chestPositions.iterator();
+                while (iterator.hasNext()) {
+                    BlockPos pos = iterator.next();
+                    
+                    // Calcul de la distance avec le joueur
+                    double distSq = client.player.getSquaredDistance(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+                    
+                    // SI LE JOUEUR EST PROCHE (Moins de 6 blocs), on vérifie s'il l'a ouvert
+                    if (distSq <= 36.0) { 
+                        net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
+                        if (be == null) {
+                            iterator.remove();
+                            continue;
+                        }
+
+                        boolean opened = false;
+                        String className = be.getClass().getName().toLowerCase();
+
+                        if (className.contains("lootr") && (className.contains("chest") || className.contains("barrel"))) {
+                            if (isChestOpened(be, client.player.getUuid())) {
+                                opened = true;
+                            }
+                        } else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
+                            if (lootable.getLootTable() == null) {
+                                opened = true;
+                            }
+                        }
+
+                        // Si ouvert, on retire de la liste immédiatement et on n'affiche rien
+                        if (opened) {
+                            iterator.remove();
+                            continue;
+                        }
+                    }
+
+                    // Affichage de la balise (Très léger pour le PC si pas de calcul)
+                    matrices.push();
+                    matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
+                    WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, r, g, b, a);
+                    WorldRenderer.drawBox(matrices, buffer, 0.4, 1.0, 0.4, 0.6, 300.0, 0.6, r, g, b, a);
+                    matrices.pop();
                 }
-
-                matrices.push();
-                matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
-
-                // 1. Dessine la boîte autour du coffre
-                WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, r, g, b, a);
-                
-                // 2. Dessine le rayon vertical (balise) qui monte vers le ciel
-                WorldRenderer.drawBox(matrices, buffer, 0.4, 1.0, 0.4, 0.6, 300.0, 0.6, r, g, b, a);
-
-                matrices.pop();
             }
         });
     }
 
-    // Analyse approfondie du coffre pour détecter si notre joueur l'a déjà ouvert
+    // Analyse de la mémoire du coffre
     private static boolean isChestOpened(net.minecraft.block.entity.BlockEntity be, java.util.UUID playerUuid) {
-        if (be == null) return false;
+        if (be == null || playerUuid == null) return false;
+        String uuidStr = playerUuid.toString();
         try {
             Class<?> clazz = be.getClass();
             while (clazz != null && clazz != Object.class) {
@@ -158,36 +191,8 @@ public class ChestTrackerClient implements ClientModInitializer {
                         Object val = field.get(be);
                         if (val == null) continue;
 
-                        // Recherche dans les listes/ensembles d'UUID
-                        if (val instanceof java.util.Collection<?> col) {
-                            for (Object elem : col) {
-                                if (elem != null && (elem.equals(playerUuid) || elem.toString().equalsIgnoreCase(playerUuid.toString()))) {
-                                    return true;
-                                }
-                            }
-                        } 
-                        // Recherche dans les dictionnaires (Maps)
-                        else if (val instanceof java.util.Map<?, ?> map) {
-                            for (Object key : map.keySet()) {
-                                if (key != null && (key.equals(playerUuid) || key.toString().equalsIgnoreCase(playerUuid.toString()))) {
-                                    return true;
-                                }
-                            }
-                        } 
-                        // Recherche dans les tableaux simples
-                        else if (val instanceof Object[] arr) {
-                            for (Object elem : arr) {
-                                if (elem != null && (elem.equals(playerUuid) || elem.toString().equalsIgnoreCase(playerUuid.toString()))) {
-                                    return true;
-                                }
-                            }
-                        } 
-                        // Recherche d'un indicateur oui/non (ex: field "opened")
-                        else if (val instanceof Boolean bool) {
-                            String name = field.getName().toLowerCase();
-                            if ((name.contains("open") || name.contains("loot")) && bool) {
-                                return true;
-                            }
+                        if (val.toString().contains(uuidStr)) {
+                            return true;
                         }
                     } catch (Exception ignored) {}
                 }
