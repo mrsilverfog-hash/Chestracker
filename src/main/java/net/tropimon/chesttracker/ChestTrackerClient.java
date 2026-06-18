@@ -11,16 +11,13 @@ import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.render.*;
 import net.minecraft.registry.Registries;
-import net.minecraft.state.property.Property;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import org.lwjgl.glfw.GLFW;
 import org.joml.Matrix4f;
 
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 public class ChestTrackerClient implements ClientModInitializer {
@@ -30,7 +27,6 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static int scanTick = 0;
     private static final int SCAN_INTERVAL = 100;
     
-    // On stocke la position ET l'état du bloc pour comparer
     private static Map<BlockPos, BlockState> trackedBlocks = new HashMap<>();
     private static final int BEAM_HEIGHT = 256;
 
@@ -78,7 +74,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 BlockPos pos = entry.getKey();
                 BlockState currentState = client.world.getBlockState(pos);
 
-                // COMPARISON : Si l'état actuel est différent de l'état scanné (ex: couleur changée), on ignore
+                // Si le bloc change d'état (ex: devient gris), on arrête de le dessiner
                 if (!currentState.equals(entry.getValue())) continue;
 
                 String path = Registries.BLOCK.getId(currentState.getBlock()).getPath();
@@ -107,6 +103,7 @@ public class ChestTrackerClient implements ClientModInitializer {
         BlockPos.iterate(center.add(-50, -50, -50), center.add(50, 50, 50)).forEach(pos -> {
             BlockState state = world.getBlockState(pos);
             String path = Registries.BLOCK.getId(state.getBlock()).getPath();
+            // On capture tout ce qui contient "lootr" (coffres, tonneaux, shulkers)
             if (path.contains("lootr") || path.contains("safari_ball") || path.contains("suspicious")) {
                 result.put(pos.toImmutable(), state);
             }
