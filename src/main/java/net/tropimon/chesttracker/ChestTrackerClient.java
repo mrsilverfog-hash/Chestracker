@@ -14,14 +14,11 @@ import net.minecraft.client.render.*;
 import net.minecraft.registry.Registries;
 import net.minecraft.state.property.Property;
 import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import org.lwjgl.glfw.GLFW;
 import org.joml.Matrix4f;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -78,9 +75,7 @@ public class ChestTrackerClient implements ClientModInitializer {
 
             for (BlockPos pos : cachedBlocks) {
                 BlockState state = client.world.getBlockState(pos);
-                BlockEntity be = client.world.getBlockEntity(pos);
-                
-                if (!isAvailable(state, be, client.player.getUuid().toString())) continue;
+                if (!isAvailable(state)) continue;
 
                 String path = Registries.BLOCK.getId(state.getBlock()).getPath();
                 float r, g, b;
@@ -118,30 +113,14 @@ public class ChestTrackerClient implements ClientModInitializer {
         return result;
     }
 
-    private boolean isAvailable(BlockState state, BlockEntity be, String playerUuid) {
-        if (be != null && be.getClass().getName().toLowerCase().contains("lootr")) {
-            try {
-                // Vérifier les méthodes pour trouver une table de loot nulle
-                for (Method method : be.getClass().getMethods()) {
-                    if (method.getName().equals("getLootTable") && method.getParameterCount() == 0) {
-                        if (method.invoke(be) == null) return false;
-                    }
-                }
-                // Vérifier les champs pour l'UUID du joueur
-                for (Field field : be.getClass().getDeclaredFields()) {
-                    field.setAccessible(true);
-                    Object val = field.get(be);
-                    if (val != null && val.toString().contains(playerUuid)) return false;
-                }
-            } catch (Exception ignored) {}
-        }
-        
+    private boolean isAvailable(BlockState state) {
         Collection<Property<?>> properties = state.getProperties();
         for (Property<?> prop : properties) {
             String name = prop.getName();
-            if (name.equals("available") || name.equals("looted")) {
+            // On vérifie tous les états possibles d'ouverture/loot
+            if (name.equals("available") || name.equals("looted") || name.equals("open")) {
                 Comparable<?> value = state.get((Property) prop);
-                if (name.equals("available")) return Boolean.TRUE.equals(value);
+                if (name.equals("available") || name.equals("open")) return Boolean.TRUE.equals(value);
                 if (name.equals("looted")) return !Boolean.TRUE.equals(value);
             }
         }
