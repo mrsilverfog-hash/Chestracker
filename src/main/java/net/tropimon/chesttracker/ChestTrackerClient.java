@@ -20,6 +20,7 @@ import net.minecraft.world.World;
 import org.lwjgl.glfw.GLFW;
 import org.joml.Matrix4f;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -78,7 +79,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                 BlockState state = client.world.getBlockState(pos);
                 BlockEntity be = client.world.getBlockEntity(pos);
                 
-                // Vérification instantanée incluant Lootr
                 if (!isAvailable(state, be, client.player.getUuid().toString())) continue;
 
                 String path = Registries.BLOCK.getId(state.getBlock()).getPath();
@@ -118,14 +118,20 @@ public class ChestTrackerClient implements ClientModInitializer {
         return result;
     }
 
-    @SuppressWarnings("unchecked")
     private boolean isAvailable(BlockState state, BlockEntity be, String playerUuid) {
-        // Vérification Lootr
         if (be != null && be.getClass().getName().toLowerCase().contains("lootr")) {
-            return !be.toString().contains(playerUuid);
+            if (be.toString().contains(playerUuid)) return false;
+            try {
+                for (Field field : be.getClass().getDeclaredFields()) {
+                    field.setAccessible(true);
+                    Object val = field.get(be);
+                    if (val instanceof Boolean && (field.getName().toLowerCase().contains("open") || field.getName().toLowerCase().contains("looted"))) {
+                        if ((Boolean) val) return false;
+                    }
+                }
+            } catch (Exception ignored) {}
         }
         
-        // Vérification standard
         Collection<Property<?>> properties = state.getProperties();
         for (Property<?> prop : properties) {
             String name = prop.getName();
