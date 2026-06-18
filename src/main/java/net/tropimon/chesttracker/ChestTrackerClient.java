@@ -80,11 +80,11 @@ public class ChestTrackerClient implements ClientModInitializer {
                                 boolean isTarget = false;
                                 String className = be.getClass().getName().toLowerCase();
 
-                                // Détection des blocs du mod Lootr (Coffres/Tonneaux de butin)
+                                // Détection Lootr
                                 if (className.contains("lootr")) {
                                     isTarget = true;
                                 } 
-                                // Détection des blocs de butin classiques ou renommés
+                                // Détection classique
                                 else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
                                     if (lootable.getLootTable() != null) {
                                         isTarget = true;
@@ -119,18 +119,4 @@ public class ChestTrackerClient implements ClientModInitializer {
             VertexConsumer buffer = consumers.getBuffer(RenderLayer.getLines());
 
             float r = 0.0f;
-            float g = 0.6f;
-            float b = 1.0f;
-            float a = 1.0f;
-
-            for (BlockPos pos : chestPositions) {
-                matrices.push();
-                matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
-
-                WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, r, g, b, a);
-
-                matrices.pop();
-            }
-        });
-    }
-}
+            float g = 0
