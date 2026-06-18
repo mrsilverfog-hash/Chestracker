@@ -12,13 +12,17 @@ import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.render.*;
 import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import org.lwjgl.glfw.GLFW;
 import org.joml.Matrix4f;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 public class ChestTrackerClient implements ClientModInitializer {
 
@@ -28,6 +32,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static final int SCAN_INTERVAL = 100;
     
     private static Map<BlockPos, BlockState> trackedBlocks = new HashMap<>();
+    private static Set<BlockPos> openedBlocks = new HashSet<>();
     private static final int BEAM_HEIGHT = 256;
 
     @Override
@@ -38,17 +43,34 @@ public class ChestTrackerClient implements ClientModInitializer {
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null || client.world == null) return;
+            
             while (toggleKey.wasPressed()) {
                 active = !active;
                 client.inGameHud.setTitle(Text.literal(active ? "§aScanner : ACTIVÉ" : "§cScanner : DÉSACTIVÉ"));
-                if (!active) trackedBlocks.clear();
+                if (!active) {
+                    trackedBlocks.clear();
+                    openedBlocks.clear();
+                }
             }
+
             if (!active) return;
 
+            // Scan automatique périodique
             scanTick++;
             if (scanTick >= SCAN_INTERVAL) {
                 scanTick = 0;
                 trackedBlocks = scanWorld(client.world, client.player.getBlockPos());
+            }
+
+            // Clic droit pour supprimer manuellement le rayon d'un bloc visé
+            if (client.options.useKey.isPressed()) {
+                HitResult hit = client.crosshairTarget;
+                if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
+                    BlockPos targetPos = ((BlockHitResult) hit).getBlockPos();
+                    if (trackedBlocks.containsKey(targetPos)) {
+                        openedBlocks.add(targetPos);
+                    }
+                }
             }
         });
 
@@ -72,10 +94,17 @@ public class ChestTrackerClient implements ClientModInitializer {
 
             for (Map.Entry<BlockPos, BlockState> entry : trackedBlocks.entrySet()) {
                 BlockPos pos = entry.getKey();
-                BlockState currentState = client.world.getBlockState(pos);
+                
+                // Ignorer si déjà ouvert manuellement
+                if (openedBlocks.contains(pos)) continue;
 
-                // Si le bloc change d'état (ex: devient gris), on arrête de le dessiner
-                if (!currentState.equals(entry.getValue())) continue;
+                BlockState currentState = client.world.getBlockState(pos);
+                
+                // Ignorer si l'état a changé (cas des tonneaux qui changent de texture)
+                if (!currentState.equals(entry.getValue())) {
+                    openedBlocks.add(pos);
+                    continue;
+                }
 
                 String path = Registries.BLOCK.getId(currentState.getBlock()).getPath();
                 float r = path.contains("lootr") ? 0.0f : (path.contains("safari_ball") ? 0.0f : 1.0f);
@@ -103,7 +132,6 @@ public class ChestTrackerClient implements ClientModInitializer {
         BlockPos.iterate(center.add(-50, -50, -50), center.add(50, 50, 50)).forEach(pos -> {
             BlockState state = world.getBlockState(pos);
             String path = Registries.BLOCK.getId(state.getBlock()).getPath();
-            // On capture tout ce qui contient "lootr" (coffres, tonneaux, shulkers)
             if (path.contains("lootr") || path.contains("safari_ball") || path.contains("suspicious")) {
                 result.put(pos.toImmutable(), state);
             }
