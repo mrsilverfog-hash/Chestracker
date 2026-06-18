@@ -21,6 +21,7 @@ import org.lwjgl.glfw.GLFW;
 import org.joml.Matrix4f;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -109,7 +110,6 @@ public class ChestTrackerClient implements ClientModInitializer {
         BlockPos.iterate(center.add(-50, -50, -50), center.add(50, 50, 50)).forEach(pos -> {
             BlockState state = world.getBlockState(pos);
             String path = Registries.BLOCK.getId(state.getBlock()).getPath();
-            
             if (path.equals("suspicious_safari_gravel") || path.equals("suspicious_safari_sand") || 
                 path.equals("safari_ball_loot") || path.contains("lootr")) {
                 result.add(pos.toImmutable());
@@ -120,14 +120,18 @@ public class ChestTrackerClient implements ClientModInitializer {
 
     private boolean isAvailable(BlockState state, BlockEntity be, String playerUuid) {
         if (be != null && be.getClass().getName().toLowerCase().contains("lootr")) {
-            if (be.toString().contains(playerUuid)) return false;
             try {
+                // Vérifier les méthodes pour trouver une table de loot nulle
+                for (Method method : be.getClass().getMethods()) {
+                    if (method.getName().equals("getLootTable") && method.getParameterCount() == 0) {
+                        if (method.invoke(be) == null) return false;
+                    }
+                }
+                // Vérifier les champs pour l'UUID du joueur
                 for (Field field : be.getClass().getDeclaredFields()) {
                     field.setAccessible(true);
                     Object val = field.get(be);
-                    if (val instanceof Boolean && (field.getName().toLowerCase().contains("open") || field.getName().toLowerCase().contains("looted"))) {
-                        if ((Boolean) val) return false;
-                    }
+                    if (val != null && val.toString().contains(playerUuid)) return false;
                 }
             } catch (Exception ignored) {}
         }
