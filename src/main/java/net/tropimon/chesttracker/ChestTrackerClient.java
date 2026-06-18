@@ -27,7 +27,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static KeyBinding toggleKey;
     private static boolean active = false;
     private static int scanTick = 0;
-    private static final int SCAN_INTERVAL = 30; // Scan plus rapide pour actualiser dès qu'un objet est pris
+    private static final int SCAN_INTERVAL = 30; 
     
     private static final List<BlockPos> chestPositions = new ArrayList<>();
     private static final List<BlockPos> safariPositions = new ArrayList<>();
@@ -78,7 +78,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                         WorldChunk chunk = client.world.getChunk(cx, cz);
                         if (chunk == null) continue;
 
-                        // 1. Recherche des blocs via les sections de Chunk (Sable, Gravier et Safari Ball)
                         net.minecraft.world.chunk.ChunkSection[] sections = chunk.getSectionArray();
                         int bottomY = chunk.getBottomY();
                         for (int sIdx = 0; sIdx < sections.length; sIdx++) {
@@ -105,11 +104,11 @@ public class ChestTrackerClient implements ClientModInitializer {
                                             net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(targetPos);
                                             
                                             if (id.contains("ball")) {
-                                                if (!isSafariLooted(state, be, client)) {
+                                                if (!isSafariBallLooted(state, be)) {
                                                     tempSafariBallPos.add(targetPos.toImmutable());
                                                 }
                                             } else if (id.contains("sand") || id.contains("gravel")) {
-                                                if (!isSafariLooted(state, be, client)) {
+                                                if (!isBlockLooted(state)) {
                                                     tempSafariPos.add(targetPos.toImmutable());
                                                 }
                                             }
@@ -119,7 +118,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                             }
                         }
 
-                        // 2. Recherche des conteneurs Lootr classiques
+                        // Recherche des coffres Lootr
                         for (BlockPos pos : chunk.getBlockEntityPositions()) {
                             net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
                             if (be == null) continue;
@@ -159,7 +158,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                     net.minecraft.block.BlockState state = client.world.getBlockState(pos);
                     net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
                     
-                    if (state == null || state.isAir() || isSafariLooted(state, be, client)) { 
+                    if (state == null || state.isAir() || isSafariBallLooted(state, be)) { 
                         iterator.remove(); 
                         continue; 
                     }
@@ -179,9 +178,8 @@ public class ChestTrackerClient implements ClientModInitializer {
                 while (iterator.hasNext()) {
                     BlockPos pos = iterator.next();
                     net.minecraft.block.BlockState state = client.world.getBlockState(pos);
-                    net.minecraft.block.entity.BlockEntity be = client.world.getBlockEntity(pos);
                     
-                    if (state == null || state.isAir() || isSafariLooted(state, be, client)) { 
+                    if (state == null || state.isAir() || isBlockLooted(state)) { 
                         iterator.remove(); 
                         continue; 
                     }
@@ -218,61 +216,41 @@ public class ChestTrackerClient implements ClientModInitializer {
         });
     }
 
-    private static boolean isSafariLooted(net.minecraft.block.BlockState state, net.minecraft.block.entity.BlockEntity be, MinecraftClient client) {
+    // Vérification stricte pour le Sable et Gravier suspect
+    private static boolean isBlockLooted(net.minecraft.block.BlockState state) {
         if (state == null || state.isAir()) return true;
 
-        // 1. Analyse complète des propriétés du BlockState (Vérification de l'état vide ou complété)
         for (net.minecraft.state.property.Property<?> property : state.getProperties()) {
-            String propName = property.getName().toLowerCase();
-            Object value = state.get(property);
-            if (value == null) continue;
-            String valStr = value.toString().toLowerCase();
-            
-            // Si une propriété indique explicitement que c'est vide ou brossé au max
-            if (propName.contains("empty") || propName.contains("looted") || propName.contains("cleared")) {
-                if (valStr.equals("true")) return true;
+            if (property.getName().equalsIgnoreCase("looted")) {
+                Object value = state.get(property);
+                if (value != null && value.toString().equalsIgnoreCase("true")) {
+                    return true; // Le bloc affiche explicitement "looted: true", donc pas de rayon.
+                }
             }
-            if (propName.equals("dusted") || propName.equals("brushed") || propName.equals("stage")) {
-                if (valStr.equals("3")) return true;
+        }
+        return false;
+    }
+
+    // Vérification stricte pour la Safari Ball
+    private static boolean isSafariBallLooted(net.minecraft.block.BlockState state, net.minecraft.block.entity.BlockEntity be) {
+        if (state == null || state.isAir()) return true;
+
+        // Si la Safari Ball utilise aussi la propriété looted dans son bloc
+        for (net.minecraft.state.property.Property<?> property : state.getProperties()) {
+            if (property.getName().equalsIgnoreCase("looted")) {
+                Object value = state.get(property);
+                if (value != null && value.toString().equalsIgnoreCase("true")) return true;
             }
         }
 
-        // 2. Détection par l'inventaire ou la disparition de la BlockEntity
-        if (be != null) {
-            if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
-                if (lootable.getLootTable() == null && lootable.isEmpty()) return true;
-            }
-            if (be instanceof net.minecraft.inventory.Inventory inv) {
-                if (inv.isEmpty()) return true;
-            }
+        // Si la BlockEntity a disparu ou est vide
+        if (be == null) return true;
 
-            // Extraction par réflexion pour trouver les variables "_e" / "empty" / "looted" cachées
-            try {
-                Class<?> clazz = be.getClass();
-                while (clazz != null && clazz != Object.class) {
-                    for (java.lang.reflect.Field field : clazz.getDeclaredFields()) {
-                        field.setAccessible(true);
-                        String name = field.getName().toLowerCase();
-                        Object val = field.get(be);
-                        if (val == null) continue;
-                        
-                        if (name.contains("empty") || name.contains("looted") || name.contains("hasloot")) {
-                            if (val instanceof Boolean) {
-                                boolean boolVal = (Boolean) val;
-                                if (name.contains("hasloot")) return !boolVal;
-                                return boolVal;
-                            }
-                        }
-                    }
-                    clazz = clazz.getSuperclass();
-                }
-            } catch (Exception ignored) {}
-        } else {
-            // Si c'est un bloc qui requiert normalement une BlockEntity (comme la boule) et qu'il n'y en a plus, il est vide
-            String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString().toLowerCase();
-            if (blockId.contains("ball")) {
-                return true;
-            }
+        if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
+            if (lootable.getLootTable() == null && lootable.isEmpty()) return true;
+        }
+        if (be instanceof net.minecraft.inventory.Inventory inv) {
+            if (inv.isEmpty()) return true;
         }
 
         return false;
