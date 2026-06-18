@@ -75,22 +75,29 @@ public class ChestTrackerClient implements ClientModInitializer {
 
                             if (relX <= 64 && relZ <= 64 && relY >= 0 && relY <= 64) {
                                 net.minecraft.block.entity.BlockEntity be = chunk.getBlockEntity(pos);
+                                if (be == null) continue;
                                 
-                                // Filtre les conteneurs de type Butin (gère Coffres et Tonneaux)
-                                if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
-                                    boolean isLoot = lootable.getLootTable() != null;
-                                    
-                                    // Vérification par nom si le serveur utilise des conteneurs renommés
-                                    if (!isLoot && lootable.hasCustomName() && lootable.getDisplayName() != null) {
+                                boolean isTarget = false;
+                                String className = be.getClass().getName().toLowerCase();
+
+                                // Détection des blocs du mod Lootr (Coffres/Tonneaux de butin)
+                                if (className.contains("lootr")) {
+                                    isTarget = true;
+                                } 
+                                // Détection des blocs de butin classiques ou renommés
+                                else if (be instanceof net.minecraft.block.entity.LootableContainerBlockEntity lootable) {
+                                    if (lootable.getLootTable() != null) {
+                                        isTarget = true;
+                                    } else if (lootable.hasCustomName() && lootable.getDisplayName() != null) {
                                         String name = lootable.getDisplayName().getString().toLowerCase();
                                         if (name.contains("butin")) {
-                                            isLoot = true;
+                                            isTarget = true;
                                         }
                                     }
-                                    
-                                    if (isLoot) {
-                                        chestPositions.add(pos.toImmutable());
-                                    }
+                                }
+
+                                if (isTarget) {
+                                    chestPositions.add(pos.toImmutable());
                                 }
                             }
                         }
@@ -120,7 +127,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                 matrices.push();
                 matrices.translate(pos.getX() - cameraPos.x, pos.getY() - cameraPos.y, pos.getZ() - cameraPos.z);
 
-                // Dessine la boîte autour du bloc ciblé
                 WorldRenderer.drawBox(matrices, buffer, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, r, g, b, a);
 
                 matrices.pop();
