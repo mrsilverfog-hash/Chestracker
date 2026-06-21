@@ -61,7 +61,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                 cachedBlocks = findAvailableBlocks(client.world, client.player.getBlockPos());
             }
 
-            // Clic droit : suppression manuelle uniquement pour les Lootr
             if (client.options.useKey.isPressed()) {
                 HitResult hit = client.crosshairTarget;
                 if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
@@ -96,10 +95,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 BlockState state = client.world.getBlockState(pos);
                 String path = Registries.BLOCK.getId(state.getBlock()).getPath();
 
-                // 1. Exclusion manuelle si c'est un Lootr cliqué
                 if (path.contains("lootr") && manualIgnoreList.contains(pos)) continue;
-
-                // 2. Logique automatique (sable, gravier, etc.)
                 if (!isAvailable(state)) continue;
 
                 float r, g, b;
@@ -152,17 +148,33 @@ public class ChestTrackerClient implements ClientModInitializer {
     }
 
     private void drawMinecraftBeaconBeam(Tessellator tessellator, Matrix4f matrix, float height, float r, float g, float b, float a) {
-        BufferBuilder builder = tessellator.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
-        float min = 0.4f, max = 0.6f;
-        addFace(builder, matrix, min, max, 0, height, r, g, b, a, true);
-        addFace(builder, matrix, min, max, 0, height, r, g, b, a, false);
-        BufferRenderer.drawWithGlobalProgram(builder.end());
+        // Cœur intérieur coloré
+        BufferBuilder builderInner = tessellator.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
+        addFace3D(builderInner, matrix, 0.4f, 0.6f, 0, height, r, g, b, 0.4f);
+        BufferRenderer.drawWithGlobalProgram(builderInner.end());
+
+        // Aura extérieure colorée
+        BufferBuilder builderOuter = tessellator.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
+        addFace3D(builderOuter, matrix, 0.3f, 0.7f, 0, height, r, g, b, 0.15f);
+        BufferRenderer.drawWithGlobalProgram(builderOuter.end());
     }
 
-    private void addFace(BufferBuilder b, Matrix4f m, float min, float max, float hMin, float hMax, float r, float g, float bl, float a, boolean h) {
-        b.vertex(m, h ? min : min, hMin, h ? min : max).color(r, g, bl, a);
-        b.vertex(m, h ? max : min, hMin, h ? max : max).color(r, g, bl, a);
-        b.vertex(m, h ? max : min, hMax, h ? max : max).color(r, g, bl, a);
-        b.vertex(m, h ? min : min, hMax, h ? min : max).color(r, g, bl, a);
+    private void addFace3D(BufferBuilder b, Matrix4f m, float min, float max, float hMin, float hMax, float r, float g, float bl, float a) {
+        b.vertex(m, min, hMin, min).color(r, g, bl, a);
+        b.vertex(m, max, hMin, min).color(r, g, bl, a);
+        b.vertex(m, max, hMax, min).color(r, g, bl, a);
+        b.vertex(m, min, hMax, min).color(r, g, bl, a);
+        b.vertex(m, min, hMin, max).color(r, g, bl, a);
+        b.vertex(m, max, hMin, max).color(r, g, bl, a);
+        b.vertex(m, max, hMax, max).color(r, g, bl, a);
+        b.vertex(m, min, hMax, max).color(r, g, bl, a);
+        b.vertex(m, max, hMin, min).color(r, g, bl, a);
+        b.vertex(m, max, hMin, max).color(r, g, bl, a);
+        b.vertex(m, max, hMax, max).color(r, g, bl, a);
+        b.vertex(m, max, hMax, min).color(r, g, bl, a);
+        b.vertex(m, min, hMin, min).color(r, g, bl, a);
+        b.vertex(m, min, hMin, max).color(r, g, bl, a);
+        b.vertex(m, min, hMax, max).color(r, g, bl, a);
+        b.vertex(m, min, hMax, min).color(r, g, bl, a);
     }
 }
