@@ -61,7 +61,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 cachedBlocks = findAvailableBlocks(client.world, client.player.getBlockPos());
             }
 
-            // Gestion clic droit UNIQUEMENT pour les Lootr
+            // Clic droit : suppression manuelle uniquement pour les Lootr
             if (client.options.useKey.isPressed()) {
                 HitResult hit = client.crosshairTarget;
                 if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
@@ -96,10 +96,10 @@ public class ChestTrackerClient implements ClientModInitializer {
                 BlockState state = client.world.getBlockState(pos);
                 String path = Registries.BLOCK.getId(state.getBlock()).getPath();
 
-                // Exclusion manuelle pour les Lootr cliqués
+                // 1. Exclusion manuelle si c'est un Lootr cliqué
                 if (path.contains("lootr") && manualIgnoreList.contains(pos)) continue;
 
-                // Logique automatique pour tout le reste
+                // 2. Logique automatique (sable, gravier, etc.)
                 if (!isAvailable(state)) continue;
 
                 float r, g, b;
@@ -128,6 +128,7 @@ public class ChestTrackerClient implements ClientModInitializer {
         BlockPos.iterate(center.add(-50, -50, -50), center.add(50, 50, 50)).forEach(pos -> {
             BlockState state = world.getBlockState(pos);
             String path = Registries.BLOCK.getId(state.getBlock()).getPath();
+            
             if (path.equals("suspicious_safari_gravel") || path.equals("suspicious_safari_sand") || 
                 path.equals("safari_ball_loot") || path.contains("lootr")) {
                 if (isAvailable(state)) result.add(pos.toImmutable());
@@ -152,7 +153,7 @@ public class ChestTrackerClient implements ClientModInitializer {
 
     private void drawMinecraftBeaconBeam(Tessellator tessellator, Matrix4f matrix, float height, float r, float g, float b, float a) {
         BufferBuilder builder = tessellator.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
-        float min = 0.2f, max = 0.8f;
+        float min = 0.4f, max = 0.6f;
         addFace(builder, matrix, min, max, 0, height, r, g, b, a, true);
         addFace(builder, matrix, min, max, 0, height, r, g, b, a, false);
         BufferRenderer.drawWithGlobalProgram(builder.end());
