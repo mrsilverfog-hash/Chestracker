@@ -41,7 +41,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static boolean active = false;
 
     private static final int SCAN_RADIUS = 64;
-    private static final int SCAN_BUDGET_PER_TICK = 25000;
+    private static final int SCAN_BUDGET_PER_TICK = 30000;
     private static final int BEAM_HEIGHT = 256;
 
     private static final Map<Block, BlockCategory> targetBlocks = new HashMap<>();
