@@ -121,7 +121,7 @@ public class ChestTrackerClient implements ClientModInitializer {
 
     private List<BlockPos> findAvailableBlocks(World world, BlockPos center) {
         List<BlockPos> result = new ArrayList<>();
-        BlockPos.iterate(center.add(-50, -50, -50), center.add(50, 50, 50)).forEach(pos -> {
+        BlockPos.iterate(center.add(-64, -64, -64), center.add(64, 64, 64)).forEach(pos -> {
             BlockState state = world.getBlockState(pos);
             String path = Registries.BLOCK.getId(state.getBlock()).getPath();
             
