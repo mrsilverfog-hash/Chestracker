@@ -21,6 +21,7 @@ import net.minecraft.util.math.BlockPos;
 import org.lwjgl.glfw.GLFW;
 import org.joml.Matrix4f;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -29,6 +30,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 public class ChestTrackerClient implements ClientModInitializer {
 
@@ -48,6 +50,9 @@ public class ChestTrackerClient implements ClientModInitializer {
 
     private static final Map<Block, BlockCategory> targetBlocks = new HashMap<>();
     private static boolean targetBlocksInitialized = false;
+
+    // Cache de la méthode "hasClientOpened(UUID)" de Lootr, trouvée par réflexion (une fois par type de bloc)
+    private static final Map<Class<?>, Method> lootrHasClientOpenedMethods = new HashMap<>();
 
     private static Iterator<BlockPos> scanIterator = null;
     private static List<TrackedBlock> pendingBlocks = new ArrayList<>();
@@ -105,8 +110,13 @@ public class ChestTrackerClient implements ClientModInitializer {
                 BlockPos pos = scanIterator.next();
                 BlockState state = client.world.getBlockState(pos);
                 BlockCategory category = targetBlocks.get(state.getBlock());
-                if (category != null && isAvailable(state)) {
-                    pendingBlocks.add(new TrackedBlock(pos.toImmutable(), category));
+                if (category != null) {
+                    boolean available = (category == BlockCategory.LOOTR)
+                        ? !isOpenedByThisPlayer(client, pos)
+                        : isAvailable(state);
+                    if (available) {
+                        pendingBlocks.add(new TrackedBlock(pos.toImmutable(), category));
+                    }
                 }
                 processed++;
             }
@@ -151,8 +161,10 @@ public class ChestTrackerClient implements ClientModInitializer {
             for (TrackedBlock tb : cachedBlocks) {
                 if (tb.category() == BlockCategory.LOOTR && manualIgnoreList.contains(tb.pos())) continue;
 
-                BlockState state = client.world.getBlockState(tb.pos());
-                if (!isAvailable(state)) continue;
+                boolean available = (tb.category() == BlockCategory.LOOTR)
+                    ? !isOpenedByThisPlayer(client, tb.pos())
+                    : isAvailable(client.world.getBlockState(tb.pos()));
+                if (!available) continue;
 
                 float r, g, b;
                 switch (tb.category()) {
@@ -217,6 +229,35 @@ public class ChestTrackerClient implements ClientModInitializer {
             }
         }
         targetBlocksInitialized = true;
+    }
+
+    // Demande directement à Lootr : "est-ce que ce joueur précis a déjà ouvert ce coffre/tonneau ?"
+    // (sans avoir besoin d'ajouter Lootr comme dépendance de compilation : on cherche la méthode au moment de l'exécution)
+    private static boolean isOpenedByThisPlayer(MinecraftClient client, BlockPos pos) {
+        if (client.player == null || client.world == null) return false;
+
+        BlockEntity entity = client.world.getBlockEntity(pos);
+        if (entity == null) return false;
+
+        Class<?> clazz = entity.getClass();
+        Method method = lootrHasClientOpenedMethods.computeIfAbsent(clazz, c -> {
+            try {
+                return c.getMethod("hasClientOpened", UUID.class);
+            } catch (NoSuchMethodException e) {
+                return null;
+            }
+        });
+
+        if (method == null) {
+            // Méthode introuvable (version différente de Lootr, ou pas un bloc Lootr) : on suppose "pas encore ouvert"
+            return false;
+        }
+
+        try {
+            return (boolean) method.invoke(entity, client.player.getUuid());
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     @SuppressWarnings("unchecked")
