@@ -25,11 +25,9 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 public class ChestTrackerClient implements ClientModInitializer {
@@ -57,7 +55,6 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static Iterator<BlockPos> scanIterator = null;
     private static List<TrackedBlock> pendingBlocks = new ArrayList<>();
     private static List<TrackedBlock> cachedBlocks = new ArrayList<>();
-    private static Set<BlockPos> manualIgnoreList = new HashSet<>();
 
     @Override
     public void onInitializeClient() {
@@ -78,7 +75,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                 client.inGameHud.setTitle(Text.literal(active ? "§aScanner : ACTIVÉ" : "§cScanner : DÉSACTIVÉ"));
                 if (!active) {
                     cachedBlocks.clear();
-                    manualIgnoreList.clear();
                     scanIterator = null;
                     pendingBlocks.clear();
                 }
@@ -127,16 +123,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                 scanIterator = null;
             }
 
-            if (client.options.useKey.isPressed()) {
-                HitResult hit = client.crosshairTarget;
-                if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
-                    BlockPos targetPos = ((BlockHitResult) hit).getBlockPos();
-                    Block block = client.world.getBlockState(targetPos).getBlock();
-                    if (targetBlocks.get(block) == BlockCategory.LOOTR) {
-                        manualIgnoreList.add(targetPos);
-                    }
-                }
-            }
         });
 
         WorldRenderEvents.LAST.register(context -> {
@@ -159,8 +145,6 @@ public class ChestTrackerClient implements ClientModInitializer {
             List<RenderEntry> toRender = new ArrayList<>();
 
             for (TrackedBlock tb : cachedBlocks) {
-                if (tb.category() == BlockCategory.LOOTR && manualIgnoreList.contains(tb.pos())) continue;
-
                 boolean available = (tb.category() == BlockCategory.LOOTR)
                     ? !isOpenedByThisPlayer(client, tb.pos())
                     : isAvailable(client.world.getBlockState(tb.pos()));
