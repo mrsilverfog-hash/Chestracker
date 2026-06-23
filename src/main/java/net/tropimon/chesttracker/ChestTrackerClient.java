@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
@@ -38,6 +39,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private record RenderEntry(double x, double y, double z, float r, float g, float b) {}
 
     private static KeyBinding toggleKey;
+    private static KeyBinding debugKey;
     private static boolean active = false;
 
     private static final int SCAN_RADIUS = 64;
@@ -60,6 +62,10 @@ public class ChestTrackerClient implements ClientModInitializer {
             "Activer/Désactiver Scanner", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_LEFT_BRACKET, "ChestTracker"
         ));
 
+        debugKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+            "Debug Bloc Ciblé", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_BRACKET, "ChestTracker"
+        ));
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null || client.world == null) return;
             while (toggleKey.wasPressed()) {
@@ -72,6 +78,15 @@ public class ChestTrackerClient implements ClientModInitializer {
                     pendingBlocks.clear();
                 }
             }
+
+            while (debugKey.wasPressed()) {
+                HitResult hit = client.crosshairTarget;
+                if (hit != null && hit.getType() == HitResult.Type.BLOCK) {
+                    BlockPos targetPos = ((BlockHitResult) hit).getBlockPos();
+                    printBlockDebugInfo(client, targetPos);
+                }
+            }
+
             if (!active) return;
 
             // Démarre une nouvelle passe de scan si la précédente est terminée
@@ -216,6 +231,34 @@ public class ChestTrackerClient implements ClientModInitializer {
             }
         }
         return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void printBlockDebugInfo(MinecraftClient client, BlockPos pos) {
+        if (client.player == null || client.world == null) return;
+
+        BlockState state = client.world.getBlockState(pos);
+        String id = Registries.BLOCK.getId(state.getBlock()).toString();
+
+        client.player.sendMessage(Text.literal("§6--- Debug bloc (" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + ") ---"), false);
+        client.player.sendMessage(Text.literal("§7ID : §f" + id), false);
+
+        Collection<Property<?>> properties = state.getProperties();
+        if (properties.isEmpty()) {
+            client.player.sendMessage(Text.literal("§7Propriétés : aucune"), false);
+        } else {
+            for (Property<?> prop : properties) {
+                Object value = state.get((Property) prop);
+                client.player.sendMessage(Text.literal("§7" + prop.getName() + " = §f" + value), false);
+            }
+        }
+
+        BlockEntity entity = client.world.getBlockEntity(pos);
+        if (entity == null) {
+            client.player.sendMessage(Text.literal("§7BlockEntity : aucune"), false);
+        } else {
+            client.player.sendMessage(Text.literal("§7BlockEntity : §f" + entity.getClass().getName()), false);
+        }
     }
 
     private void addFace3D(BufferBuilder b, Matrix4f m, float min, float max, float hMin, float hMax, float r, float g, float bl, float a) {
