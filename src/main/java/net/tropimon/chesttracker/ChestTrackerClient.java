@@ -5,29 +5,43 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.client.render.*;
+import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
+import net.minecraft.screen.GenericContainerScreenHandler;
+import net.minecraft.screen.ScreenHandler;
+import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.state.property.Property;
 import net.minecraft.text.Text;
+import net.minecraft.util.ActionResult;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.World;
 import org.lwjgl.glfw.GLFW;
 import org.joml.Matrix4f;
 
 import java.lang.reflect.Method;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public class ChestTrackerClient implements ClientModInitializer {
@@ -46,37 +60,83 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static final int SCAN_BUDGET_PER_TICK = 30000;
     private static final int BEAM_HEIGHT = 256;
 
+    // Pas de faisceau sur les coffres/tonneaux Lootr à 10 blocs ou moins d'un spawner à mobs
+    private static final int SPAWNER_EXCLUSION_RADIUS = 10;
+
     private static final Map<Block, BlockCategory> targetBlocks = new HashMap<>();
     private static boolean targetBlocksInitialized = false;
 
     // Cache de la méthode "hasClientOpened(UUID)" de Lootr, trouvée par réflexion (une fois par type de bloc)
     private static final Map<Class<?>, Method> lootrHasClientOpenedMethods = new HashMap<>();
 
+    // Coffres déjà reconnus comme proches d'un spawner (on ne garde que les "oui" :
+    // un "non" peut venir d'un chunk voisin pas encore chargé, donc on revérifie)
+    private static final Set<BlockPos> nearSpawnerCache = new HashSet<>();
+    private static World lastWorld = null;
+
     private static Iterator<BlockPos> scanIterator = null;
     private static List<TrackedBlock> pendingBlocks = new ArrayList<>();
     private static List<TrackedBlock> cachedBlocks = new ArrayList<>();
+
+    // ===================== AUTOLOOT (actif en même temps que le scanner) =====================
+    private static final String LOOTR_NAMESPACE = "lootr";
+    // Attente MAXIMALE après l'ouverture : on démarre dès que le contenu du coffre est arrivé,
+    // et on abandonne au bout de ce délai si le coffre est toujours vide
+    private static final int MAX_SCAN_DELAY_TICKS = 5;
+    // Nombre d'objets traités au maximum par tick (chacun = 2 clics : prendre + poser)
+    private static final int GRABS_PER_TICK = 6;
+
+    private static boolean currentContainerIsLootr = false;
+    private static boolean alreadyQueuedForThisOpen = false;
+    private static boolean screenJustOpened = false;
+    private static int ticksWaited = 0;
+    private static final Deque<Integer> pendingGrabSlots = new ArrayDeque<>();
 
     @Override
     public void onInitializeClient() {
         initTargetBlocks();
 
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "Activer/Désactiver Scanner", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_LEFT_BRACKET, "ChestTracker"
+            "Activer/Désactiver Scanner + Autoloot", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_LEFT_BRACKET, "ChestTracker"
         ));
 
         debugKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "Debug Bloc Ciblé", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_BRACKET, "ChestTracker"
         ));
 
+        // Autoloot : on retient si le bloc qu'on vient d'ouvrir est un coffre/tonneau Lootr
+        UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+            Identifier blockId = Registries.BLOCK.getId(
+                world.getBlockState(hitResult.getBlockPos()).getBlock()
+            );
+            currentContainerIsLootr = blockId.getNamespace().equals(LOOTR_NAMESPACE)
+                && (blockId.getPath().equals("lootr_chest") || blockId.getPath().equals("lootr_barrel"));
+            return ActionResult.PASS;
+        });
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null || client.world == null) return;
+
+            // Changement de monde/dimension : le cache spawner ne vaut plus rien
+            if (client.world != lastWorld) {
+                lastWorld = client.world;
+                nearSpawnerCache.clear();
+                cachedBlocks = new ArrayList<>();
+                scanIterator = null;
+                pendingBlocks = new ArrayList<>();
+            }
+
             while (toggleKey.wasPressed()) {
                 active = !active;
-                client.inGameHud.setTitle(Text.literal(active ? "§aScanner : ACTIVÉ" : "§cScanner : DÉSACTIVÉ"));
+                client.inGameHud.setTitle(Text.literal(active
+                    ? "§aScanner + Autoloot : ACTIVÉ"
+                    : "§cScanner + Autoloot : DÉSACTIVÉ"));
                 if (!active) {
                     cachedBlocks.clear();
                     scanIterator = null;
                     pendingBlocks.clear();
+                    nearSpawnerCache.clear();
+                    pendingGrabSlots.clear();
                 }
             }
 
@@ -87,6 +147,9 @@ public class ChestTrackerClient implements ClientModInitializer {
                     printBlockDebugInfo(client, targetPos);
                 }
             }
+
+            // L'autoloot tourne à chaque tick (il ne fait quelque chose que si "active" est vrai)
+            autolootTick(client);
 
             if (!active) return;
 
@@ -107,9 +170,13 @@ public class ChestTrackerClient implements ClientModInitializer {
                 BlockState state = client.world.getBlockState(pos);
                 BlockCategory category = targetBlocks.get(state.getBlock());
                 if (category != null) {
-                    boolean available = (category == BlockCategory.LOOTR)
-                        ? !isOpenedByThisPlayer(client, pos)
-                        : isAvailable(state);
+                    boolean available;
+                    if (category == BlockCategory.LOOTR) {
+                        available = !isOpenedByThisPlayer(client, pos)
+                            && !isNearSpawner(client.world, pos);
+                    } else {
+                        available = isAvailable(state);
+                    }
                     if (available) {
                         pendingBlocks.add(new TrackedBlock(pos.toImmutable(), category));
                     }
@@ -122,7 +189,6 @@ public class ChestTrackerClient implements ClientModInitializer {
                 cachedBlocks = pendingBlocks;
                 scanIterator = null;
             }
-
         });
 
         WorldRenderEvents.LAST.register(context -> {
@@ -171,7 +237,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 ));
             }
 
-            // Lasers : un seul dessin pour le cœur de tous les coffres, un seul pour l'aura de tous les coffres
+            // Lasers : un seul dessin pour le cœur de tous les blocs, un seul pour l'aura de tous les blocs
             if (!toRender.isEmpty()) {
                 Tessellator tessellator = Tessellator.getInstance();
 
@@ -199,7 +265,6 @@ public class ChestTrackerClient implements ClientModInitializer {
     }
 
     // Parcourt la liste des blocs UNE SEULE FOIS au démarrage pour savoir lesquels nous intéressent.
-    // Les critères (mêmes textes, même logique "contains" pour lootr) sont identiques à avant.
     private static void initTargetBlocks() {
         if (targetBlocksInitialized) return;
         for (Block block : Registries.BLOCK) {
@@ -213,6 +278,28 @@ public class ChestTrackerClient implements ClientModInitializer {
             }
         }
         targetBlocksInitialized = true;
+    }
+
+    // Vrai s'il y a un spawner à mobs à 10 blocs ou moins (distance réelle, pas un cube)
+    private static boolean isNearSpawner(World world, BlockPos pos) {
+        if (nearSpawnerCache.contains(pos)) return true;
+
+        int r = SPAWNER_EXCLUSION_RADIUS;
+        int rSq = r * r;
+        BlockPos.Mutable check = new BlockPos.Mutable();
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dy = -r; dy <= r; dy++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (dx * dx + dy * dy + dz * dz > rSq) continue;
+                    check.set(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
+                    if (world.getBlockState(check).isOf(Blocks.SPAWNER)) {
+                        nearSpawnerCache.add(pos.toImmutable());
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     // Demande directement à Lootr : "est-ce que ce joueur précis a déjà ouvert ce coffre/tonneau ?"
@@ -244,8 +331,8 @@ public class ChestTrackerClient implements ClientModInitializer {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private boolean isAvailable(BlockState state) {
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static boolean isAvailable(BlockState state) {
         Collection<Property<?>> properties = state.getProperties();
         for (Property<?> prop : properties) {
             String name = prop.getName();
@@ -258,8 +345,150 @@ public class ChestTrackerClient implements ClientModInitializer {
         return true;
     }
 
-    @SuppressWarnings("unchecked")
-    private void printBlockDebugInfo(MinecraftClient client, BlockPos pos) {
+    // ===================== AUTOLOOT =====================
+
+    private static void autolootTick(MinecraftClient client) {
+        if (!(client.currentScreen instanceof HandledScreen<?>)) {
+            alreadyQueuedForThisOpen = false;
+            screenJustOpened = false;
+            ticksWaited = 0;
+            pendingGrabSlots.clear();
+            return;
+        }
+
+        if (!active) {
+            pendingGrabSlots.clear();
+            return;
+        }
+
+        if (!alreadyQueuedForThisOpen) {
+            if (!screenJustOpened) {
+                screenJustOpened = true;
+                ticksWaited = 0;
+            } else {
+                ticksWaited++;
+                if (currentContainerIsLootr) {
+                    // Dès que le contenu est synchronisé (au moins un objet visible), on y va tout de suite
+                    if (containerHasItems(client.player.currentScreenHandler) || ticksWaited >= MAX_SCAN_DELAY_TICKS) {
+                        queueMatchingItems(client, client.player.currentScreenHandler);
+                        alreadyQueuedForThisOpen = true;
+                    }
+                }
+            }
+        }
+
+        if (!(client.player.currentScreenHandler instanceof GenericContainerScreenHandler containerHandler)) {
+            return;
+        }
+
+        processGrabQueue(client, containerHandler);
+    }
+
+    private static boolean containerHasItems(ScreenHandler handler) {
+        if (!(handler instanceof GenericContainerScreenHandler containerHandler)) return false;
+        int size = containerHandler.getInventory().size();
+        for (int i = 0; i < size; i++) {
+            if (!containerHandler.getSlot(i).getStack().isEmpty()) return true;
+        }
+        return false;
+    }
+
+    private static void queueMatchingItems(MinecraftClient client, ScreenHandler handler) {
+        if (!(handler instanceof GenericContainerScreenHandler containerHandler)) {
+            return;
+        }
+
+        int containerSize = containerHandler.getInventory().size();
+        var playerInventory = client.player.getInventory();
+
+        for (int i = 0; i < containerSize; i++) {
+            ItemStack containerStack = containerHandler.getSlot(i).getStack();
+            if (containerStack.isEmpty()) {
+                continue;
+            }
+
+            boolean alreadyOwned = false;
+            for (ItemStack invStack : playerInventory.main) {
+                if (!invStack.isEmpty() && invStack.getItem() == containerStack.getItem()) {
+                    alreadyOwned = true;
+                    break;
+                }
+            }
+
+            if (alreadyOwned) {
+                pendingGrabSlots.add(i);
+            }
+        }
+
+        if (!pendingGrabSlots.isEmpty()) {
+            client.player.sendMessage(
+                Text.literal("§aAutoloot : " + pendingGrabSlots.size() + " objet(s) récupéré(s)"), true);
+        }
+    }
+
+    private static void processGrabQueue(MinecraftClient client, GenericContainerScreenHandler containerHandler) {
+        int done = 0;
+        while (!pendingGrabSlots.isEmpty() && done < GRABS_PER_TICK) {
+            int slotIndex = pendingGrabSlots.poll();
+            transferViaPickup(client, containerHandler, slotIndex);
+            done++;
+        }
+    }
+
+    // Transfère un objet du coffre vers l'inventaire en 2 clics simples (prendre, puis poser),
+    // plutôt qu'un shift-clic (QUICK_MOVE) qui pose problème sur certains slots.
+    private static void transferViaPickup(MinecraftClient client, GenericContainerScreenHandler containerHandler, int containerSlotIndex) {
+        ItemStack stack = containerHandler.getSlot(containerSlotIndex).getStack().copy();
+        if (stack.isEmpty()) {
+            return;
+        }
+
+        // Étape 1 : on prend l'objet du coffre (il va sur le curseur)
+        client.interactionManager.clickSlot(
+            containerHandler.syncId, containerSlotIndex, 0, SlotActionType.PICKUP, client.player
+        );
+
+        int containerSize = containerHandler.getInventory().size();
+        int totalSlots = containerHandler.slots.size();
+
+        // Étape 2a : on cherche d'abord une pile déjà existante du même objet, avec de la place
+        Integer targetSlot = null;
+        for (int i = containerSize; i < totalSlots; i++) {
+            ItemStack invStack = containerHandler.getSlot(i).getStack();
+            if (!invStack.isEmpty() && invStack.getItem() == stack.getItem()
+                && invStack.getCount() < invStack.getMaxCount()) {
+                targetSlot = i;
+                break;
+            }
+        }
+
+        // Étape 2b : sinon, un slot vide
+        if (targetSlot == null) {
+            for (int i = containerSize; i < totalSlots; i++) {
+                if (containerHandler.getSlot(i).getStack().isEmpty()) {
+                    targetSlot = i;
+                    break;
+                }
+            }
+        }
+
+        if (targetSlot != null) {
+            // On pose l'objet dans l'inventaire
+            client.interactionManager.clickSlot(
+                containerHandler.syncId, targetSlot, 0, SlotActionType.PICKUP, client.player
+            );
+        } else {
+            // Pas de place : on remet l'objet là où on l'a pris
+            client.interactionManager.clickSlot(
+                containerHandler.syncId, containerSlotIndex, 0, SlotActionType.PICKUP, client.player
+            );
+        }
+    }
+
+    // ===================== DEBUG =====================
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void printBlockDebugInfo(MinecraftClient client, BlockPos pos) {
         if (client.player == null || client.world == null) return;
 
         BlockState state = client.world.getBlockState(pos);
@@ -284,9 +513,14 @@ public class ChestTrackerClient implements ClientModInitializer {
         } else {
             client.player.sendMessage(Text.literal("§7BlockEntity : §f" + entity.getClass().getName()), false);
         }
+
+        if (targetBlocks.get(state.getBlock()) == BlockCategory.LOOTR) {
+            boolean near = isNearSpawner(client.world, pos);
+            client.player.sendMessage(Text.literal("§7Spawner à ≤ " + SPAWNER_EXCLUSION_RADIUS + " blocs : §f" + (near ? "oui (pas de faisceau)" : "non")), false);
+        }
     }
 
-    private void addFace3D(BufferBuilder b, Matrix4f m, float min, float max, float hMin, float hMax, float r, float g, float bl, float a) {
+    private static void addFace3D(BufferBuilder b, Matrix4f m, float min, float max, float hMin, float hMax, float r, float g, float bl, float a) {
         b.vertex(m, min, hMin, min).color(r, g, bl, a);
         b.vertex(m, max, hMin, min).color(r, g, bl, a);
         b.vertex(m, max, hMax, min).color(r, g, bl, a);
