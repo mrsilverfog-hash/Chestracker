@@ -60,8 +60,10 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static final int SCAN_BUDGET_PER_TICK = 30000;
     private static final int BEAM_HEIGHT = 256;
 
-    // Pas de faisceau sur les coffres/tonneaux Lootr à 10 blocs ou moins d'un spawner à mobs
+    // Pas de faisceau sur les coffres/tonneaux Lootr à 10 blocs ou moins d'un spawner à mobs,
+    // mais seulement pour les spawners sous la couche Y = 20 (ceux des tours en surface ne comptent pas)
     private static final int SPAWNER_EXCLUSION_RADIUS = 10;
+    private static final int SPAWNER_MAX_Y = 20;
 
     private static final Map<Block, BlockCategory> targetBlocks = new HashMap<>();
     private static boolean targetBlocksInitialized = false;
@@ -285,12 +287,15 @@ public class ChestTrackerClient implements ClientModInitializer {
         if (nearSpawnerCache.contains(pos)) return true;
 
         int r = SPAWNER_EXCLUSION_RADIUS;
+        // Coffre trop haut pour qu'un spawner sous Y = 20 soit dans le rayon : rien à chercher
+        if (pos.getY() - r >= SPAWNER_MAX_Y) return false;
         int rSq = r * r;
         BlockPos.Mutable check = new BlockPos.Mutable();
         for (int dx = -r; dx <= r; dx++) {
             for (int dy = -r; dy <= r; dy++) {
                 for (int dz = -r; dz <= r; dz++) {
                     if (dx * dx + dy * dy + dz * dz > rSq) continue;
+                    if (pos.getY() + dy >= SPAWNER_MAX_Y) continue;
                     check.set(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
                     if (world.getBlockState(check).isOf(Blocks.SPAWNER)) {
                         nearSpawnerCache.add(pos.toImmutable());
@@ -516,7 +521,7 @@ public class ChestTrackerClient implements ClientModInitializer {
 
         if (targetBlocks.get(state.getBlock()) == BlockCategory.LOOTR) {
             boolean near = isNearSpawner(client.world, pos);
-            client.player.sendMessage(Text.literal("§7Spawner à ≤ " + SPAWNER_EXCLUSION_RADIUS + " blocs : §f" + (near ? "oui (pas de faisceau)" : "non")), false);
+            client.player.sendMessage(Text.literal("§7Spawner sous Y=" + SPAWNER_MAX_Y + " à ≤ " + SPAWNER_EXCLUSION_RADIUS + " blocs : §f" + (near ? "oui (pas de faisceau)" : "non")), false);
         }
     }
 
