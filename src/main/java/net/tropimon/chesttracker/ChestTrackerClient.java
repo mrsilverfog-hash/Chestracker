@@ -65,6 +65,9 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static final int SPAWNER_EXCLUSION_RADIUS = 10;
     private static final int SPAWNER_MAX_Y = 20;
 
+    // Pas de faisceau sur les coffres/tonneaux Lootr situés sous la couche Y = 50
+    private static final int LOOTR_MIN_Y = 50;
+
     private static final Map<Block, BlockCategory> targetBlocks = new HashMap<>();
     private static boolean targetBlocksInitialized = false;
 
@@ -174,7 +177,8 @@ public class ChestTrackerClient implements ClientModInitializer {
                 if (category != null) {
                     boolean available;
                     if (category == BlockCategory.LOOTR) {
-                        available = !isOpenedByThisPlayer(client, pos)
+                        available = pos.getY() >= LOOTR_MIN_Y
+                            && !isOpenedByThisPlayer(client, pos)
                             && !isNearSpawner(client.world, pos);
                     } else {
                         available = isAvailable(state);
@@ -520,6 +524,7 @@ public class ChestTrackerClient implements ClientModInitializer {
         }
 
         if (targetBlocks.get(state.getBlock()) == BlockCategory.LOOTR) {
+            client.player.sendMessage(Text.literal("§7Sous Y=" + LOOTR_MIN_Y + " : §f" + (pos.getY() < LOOTR_MIN_Y ? "oui (pas de faisceau)" : "non")), false);
             boolean near = isNearSpawner(client.world, pos);
             client.player.sendMessage(Text.literal("§7Spawner sous Y=" + SPAWNER_MAX_Y + " à ≤ " + SPAWNER_EXCLUSION_RADIUS + " blocs : §f" + (near ? "oui (pas de faisceau)" : "non")), false);
         }
