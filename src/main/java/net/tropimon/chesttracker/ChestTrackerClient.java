@@ -73,10 +73,7 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static final int BLOCK_BUDGET_PER_TICK = 40000;
     private static final int BEAM_HEIGHT = 256;
 
-    // Pas de faisceau sur les coffres/tonneaux Lootr à 10 blocs ou moins d'un spawner à mobs,
-    // mais seulement pour les spawners sous la couche Y = 20 (ceux des tours en surface ne comptent pas)
-    private static final int SPAWNER_EXCLUSION_RADIUS = 10;
-    private static final int SPAWNER_MAX_Y = 20;
+
 
     private static final Map<Block, BlockCategory> targetBlocks = new HashMap<>();
     private static boolean targetBlocksInitialized = false;
@@ -84,9 +81,6 @@ public class ChestTrackerClient implements ClientModInitializer {
     // Cache de la méthode "hasClientOpened(UUID)" de Lootr, trouvée par réflexion (une fois par type de bloc)
     private static final Map<Class<?>, Method> lootrHasClientOpenedMethods = new HashMap<>();
 
-    // Coffres déjà reconnus comme proches d'un spawner (on ne garde que les "oui" :
-    // un "non" peut venir d'un chunk voisin pas encore chargé, donc on revérifie)
-    private static final Set<BlockPos> nearSpawnerCache = new HashSet<>();
     private static World lastWorld = null;
 
     private static boolean scanning = false;
@@ -136,10 +130,9 @@ public class ChestTrackerClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null || client.world == null) return;
 
-            // Changement de monde/dimension : le cache spawner ne vaut plus rien
+            // Changement de monde/dimension : on repart de zéro
             if (client.world != lastWorld) {
                 lastWorld = client.world;
-                nearSpawnerCache.clear();
                 cachedBlocks = new ArrayList<>();
                 scanning = false;
                 pendingBlocks = new ArrayList<>();
@@ -154,8 +147,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                     cachedBlocks.clear();
                     scanning = false;
                     pendingBlocks.clear();
-                    nearSpawnerCache.clear();
-                    pendingGrabSlots.clear();
+                        pendingGrabSlots.clear();
                 }
             }
 
@@ -264,31 +256,6 @@ public class ChestTrackerClient implements ClientModInitializer {
             }
         }
         targetBlocksInitialized = true;
-    }
-
-    // Vrai s'il y a un spawner à mobs à 10 blocs ou moins (distance réelle, pas un cube)
-    private static boolean isNearSpawner(World world, BlockPos pos) {
-        if (nearSpawnerCache.contains(pos)) return true;
-
-        int r = SPAWNER_EXCLUSION_RADIUS;
-        // Coffre trop haut pour qu'un spawner sous Y = 20 soit dans le rayon : rien à chercher
-        if (pos.getY() - r >= SPAWNER_MAX_Y) return false;
-        int rSq = r * r;
-        BlockPos.Mutable check = new BlockPos.Mutable();
-        for (int dx = -r; dx <= r; dx++) {
-            for (int dy = -r; dy <= r; dy++) {
-                for (int dz = -r; dz <= r; dz++) {
-                    if (dx * dx + dy * dy + dz * dz > rSq) continue;
-                    if (pos.getY() + dy >= SPAWNER_MAX_Y) continue;
-                    check.set(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
-                    if (world.getBlockState(check).isOf(Blocks.SPAWNER)) {
-                        nearSpawnerCache.add(pos.toImmutable());
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
     }
 
     // Demande directement à Lootr : "est-ce que ce joueur précis a déjà ouvert ce coffre/tonneau ?"
@@ -400,8 +367,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                         BlockPos pos = new BlockPos(baseX + x, baseY + y, baseZ + z);
                         boolean available;
                         if (category == BlockCategory.LOOTR) {
-                            available = !isOpenedByThisPlayer(client, pos)
-                                && !isNearSpawner(client.world, pos);
+                            available = !isOpenedByThisPlayer(client, pos);
                         } else {
                             available = isAvailable(state);
                         }
@@ -596,8 +562,6 @@ public class ChestTrackerClient implements ClientModInitializer {
         }
 
         if (targetBlocks.get(state.getBlock()) == BlockCategory.LOOTR) {
-            boolean near = isNearSpawner(client.world, pos);
-            client.player.sendMessage(Text.literal("§7Spawner sous Y=" + SPAWNER_MAX_Y + " à ≤ " + SPAWNER_EXCLUSION_RADIUS + " blocs : §f" + (near ? "oui (pas de faisceau)" : "non")), false);
         }
     }
 
