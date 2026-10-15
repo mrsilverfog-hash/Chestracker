@@ -50,12 +50,15 @@ public class ChestTrackerClient implements ClientModInitializer {
 
     private enum BlockCategory { LOOTR, SAFARI_BALL, SUSPICIOUS }
 
-    /** covered = un bloc solide se trouve juste au-dessus : il faudra creuser pour l'atteindre. */
-    private record TrackedBlock(BlockPos pos, BlockCategory category, boolean covered) {}
+    /**
+     * darkFrom = hauteur (au-dessus du bloc trouvé) du premier bloc non-air traversé par le rayon.
+     * Le rayon est normal en dessous, foncé à partir de là. BEAM_HEIGHT = rien traversé.
+     */
+    private record TrackedBlock(BlockPos pos, BlockCategory category, float darkFrom) {}
 
-    private record RenderEntry(double x, double y, double z, float r, float g, float b, boolean covered) {}
+    private record RenderEntry(double x, double y, double z, float r, float g, float b, float darkFrom) {}
 
-    // Rayon d'un bloc recouvert : même teinte, très assombrie
+    // Partie du rayon au-dessus d'un bloc traversé : même teinte, très assombrie
     private static final float COVERED_DARKEN = 0.3f;
 
     private static KeyBinding toggleKey;
@@ -206,12 +209,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                     case SAFARI_BALL -> { r = 0.0f; g = 1.0f; b = 0.0f; }
                     default -> { r = 1.0f; g = 0.0f; b = 0.0f; }
                 }
-                // Bloc recouvert : rayon (et contour) en couleur foncée -> il faut creuser
-                if (tb.covered()) {
-                    r *= COVERED_DARKEN;
-                    g *= COVERED_DARKEN;
-                    b *= COVERED_DARKEN;
-                }
+
 
                 BlockPos pos = tb.pos();
                 context.matrixStack().push();
@@ -224,7 +222,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                     pos.getY() + 1.0 - camPos.y,
                     pos.getZ() - camPos.z,
                     r, g, b,
-                    tb.covered()
+                    tb.darkFrom()
                 ));
             }
 
@@ -236,7 +234,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 for (RenderEntry e : toRender) {
                     Matrix4f matrix = new Matrix4f(viewMatrix);
                     matrix.translate((float) e.x(), (float) e.y(), (float) e.z());
-                    addFace3D(innerBuilder, matrix, 0.4f, 0.6f, 0, BEAM_HEIGHT, e.r(), e.g(), e.b(), e.covered() ? 0.85f : 0.4f);
+                    addBeam(innerBuilder, matrix, 0.4f, 0.6f, e, 0.4f, 0.85f);
                 }
                 BufferRenderer.drawWithGlobalProgram(innerBuilder.end());
 
@@ -244,7 +242,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 for (RenderEntry e : toRender) {
                     Matrix4f matrix = new Matrix4f(viewMatrix);
                     matrix.translate((float) e.x(), (float) e.y(), (float) e.z());
-                    addFace3D(outerBuilder, matrix, 0.3f, 0.7f, 0, BEAM_HEIGHT, e.r(), e.g(), e.b(), e.covered() ? 0.4f : 0.15f);
+                    addBeam(outerBuilder, matrix, 0.3f, 0.7f, e, 0.15f, 0.4f);
                 }
                 BufferRenderer.drawWithGlobalProgram(outerBuilder.end());
             }
@@ -411,7 +409,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                         } else {
                             available = isAvailable(state);
                         }
-                        if (available) pendingBlocks.add(new TrackedBlock(pos, category, blocksBeam(client.world.getBlockState(pos.up()))));
+                        if (available) pendingBlocks.add(new TrackedBlock(pos, category, firstObstacleHeight(client.world, pos)));
                     }
                 }
             }
@@ -608,9 +606,27 @@ public class ChestTrackerClient implements ClientModInitializer {
         }
     }
 
-    /** Un bloc « arrête » visuellement le rayon s'il n'est ni de l'air, ni un liquide, ni de la végétation remplaçable. */
-    private static boolean blocksBeam(BlockState state) {
-        return !state.isAir() && !state.isReplaceable() && state.getFluidState().isEmpty();
+    /** Hauteur du premier bloc non-air (quel qu'il soit) au-dessus du bloc trouvé, ou BEAM_HEIGHT s'il n'y en a pas. */
+    private static float firstObstacleHeight(World world, BlockPos pos) {
+        int top = Math.min(BEAM_HEIGHT, world.getTopY() - (pos.getY() + 1));
+        BlockPos.Mutable m = new BlockPos.Mutable();
+        for (int h = 0; h < top; h++) {
+            m.set(pos.getX(), pos.getY() + 1 + h, pos.getZ());
+            if (!world.getBlockState(m).isAir()) return h;
+        }
+        return BEAM_HEIGHT;
+    }
+
+    /** Rayon normal jusqu'au premier bloc traversé, puis foncé (et plus opaque) jusqu'en haut. */
+    private static void addBeam(BufferBuilder b, Matrix4f m, float min, float max, RenderEntry e, float alpha, float darkAlpha) {
+        float split = Math.max(0, Math.min(BEAM_HEIGHT, e.darkFrom()));
+        if (split > 0) {
+            addFace3D(b, m, min, max, 0, split, e.r(), e.g(), e.b(), alpha);
+        }
+        if (split < BEAM_HEIGHT) {
+            addFace3D(b, m, min, max, split, BEAM_HEIGHT,
+                e.r() * COVERED_DARKEN, e.g() * COVERED_DARKEN, e.b() * COVERED_DARKEN, darkAlpha);
+        }
     }
 
     private static void addFace3D(BufferBuilder b, Matrix4f m, float min, float max, float hMin, float hMax, float r, float g, float bl, float a) {
