@@ -50,9 +50,16 @@ public class ChestTrackerClient implements ClientModInitializer {
 
     private enum BlockCategory { LOOTR, SAFARI_BALL, SUSPICIOUS }
 
-    private record TrackedBlock(BlockPos pos, BlockCategory category) {}
+    /**
+     * segments : tronçons du rayon au-dessus du bloc, par triplets (début, fin, dansUnBloc),
+     * hauteurs relatives au haut du bloc. dansUnBloc = 1 si le tronçon traverse des blocs.
+     */
+    private record TrackedBlock(BlockPos pos, BlockCategory category, float[] segments) {}
 
-    private record RenderEntry(double x, double y, double z, float r, float g, float b) {}
+    private record RenderEntry(double x, double y, double z, float r, float g, float b, float[] segments) {}
+
+    // Couleur du rayon quand il traverse des blocs : même teinte, très assombrie
+    private static final float BURIED_DARKEN = 0.25f;
 
     private static KeyBinding toggleKey;
     private static KeyBinding debugKey;
@@ -213,19 +220,22 @@ public class ChestTrackerClient implements ClientModInitializer {
                     pos.getX() - camPos.x,
                     pos.getY() + 1.0 - camPos.y,
                     pos.getZ() - camPos.z,
-                    r, g, b
+                    r, g, b,
+                    tb.segments()
                 ));
             }
 
             // Lasers : un seul dessin pour le cœur de tous les blocs, un seul pour l'aura de tous les blocs
             if (!toRender.isEmpty()) {
+                // Rayons visibles à travers le terrain : la partie enfouie apparaît en couleur foncée
+                RenderSystem.disableDepthTest();
                 Tessellator tessellator = Tessellator.getInstance();
 
                 BufferBuilder innerBuilder = tessellator.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR);
                 for (RenderEntry e : toRender) {
                     Matrix4f matrix = new Matrix4f(viewMatrix);
                     matrix.translate((float) e.x(), (float) e.y(), (float) e.z());
-                    addFace3D(innerBuilder, matrix, 0.4f, 0.6f, 0, BEAM_HEIGHT, e.r(), e.g(), e.b(), 0.4f);
+                    addBeamSegments(innerBuilder, matrix, 0.4f, 0.6f, e, 0.4f, 0.85f);
                 }
                 BufferRenderer.drawWithGlobalProgram(innerBuilder.end());
 
@@ -233,9 +243,10 @@ public class ChestTrackerClient implements ClientModInitializer {
                 for (RenderEntry e : toRender) {
                     Matrix4f matrix = new Matrix4f(viewMatrix);
                     matrix.translate((float) e.x(), (float) e.y(), (float) e.z());
-                    addFace3D(outerBuilder, matrix, 0.3f, 0.7f, 0, BEAM_HEIGHT, e.r(), e.g(), e.b(), 0.15f);
+                    addBeamSegments(outerBuilder, matrix, 0.3f, 0.7f, e, 0.15f, 0.35f);
                 }
                 BufferRenderer.drawWithGlobalProgram(outerBuilder.end());
+                RenderSystem.enableDepthTest();
             }
 
             RenderSystem.enableCull();
@@ -400,7 +411,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                         } else {
                             available = isAvailable(state);
                         }
-                        if (available) pendingBlocks.add(new TrackedBlock(pos, category));
+                        if (available) pendingBlocks.add(new TrackedBlock(pos, category, computeBeamSegments(client.world, pos)));
                     }
                 }
             }
@@ -594,6 +605,57 @@ public class ChestTrackerClient implements ClientModInitializer {
             client.player.sendMessage(Text.literal("§7Sous Y=" + LOOTR_MIN_Y + " : §f" + (pos.getY() < LOOTR_MIN_Y ? "oui (pas de faisceau)" : "non")), false);
             boolean near = isNearSpawner(client.world, pos);
             client.player.sendMessage(Text.literal("§7Spawner sous Y=" + SPAWNER_MAX_Y + " à ≤ " + SPAWNER_EXCLUSION_RADIUS + " blocs : §f" + (near ? "oui (pas de faisceau)" : "non")), false);
+        }
+    }
+
+    /** Un bloc « arrête » visuellement le rayon s'il n'est ni de l'air, ni un liquide, ni de la végétation remplaçable. */
+    private static boolean blocksBeam(BlockState state) {
+        return !state.isAir() && !state.isReplaceable() && state.getFluidState().isEmpty();
+    }
+
+    /** Découpe le rayon (BEAM_HEIGHT blocs au-dessus du bloc trouvé) en tronçons air / dans un bloc. */
+    private static float[] computeBeamSegments(World world, BlockPos pos) {
+        List<Float> out = new ArrayList<>();
+        int top = Math.min(BEAM_HEIGHT, world.getTopY() - (pos.getY() + 1));
+        if (top <= 0) return new float[]{0, BEAM_HEIGHT, 0};
+
+        BlockPos.Mutable m = new BlockPos.Mutable();
+        int start = 0;
+        boolean inside = false;
+        for (int h = 0; h < top; h++) {
+            m.set(pos.getX(), pos.getY() + 1 + h, pos.getZ());
+            boolean b = blocksBeam(world.getBlockState(m));
+            if (h == 0) {
+                inside = b;
+            } else if (b != inside) {
+                out.add((float) start); out.add((float) h); out.add(inside ? 1f : 0f);
+                start = h;
+                inside = b;
+            }
+        }
+        out.add((float) start); out.add((float) top); out.add(inside ? 1f : 0f);
+        if (top < BEAM_HEIGHT) { out.add((float) top); out.add((float) BEAM_HEIGHT); out.add(0f); }
+
+        float[] arr = new float[out.size()];
+        for (int i = 0; i < arr.length; i++) arr[i] = out.get(i);
+        return arr;
+    }
+
+    /** Dessine chaque tronçon : couleur normale à l'air libre, couleur très foncée et plus opaque dans les blocs. */
+    private static void addBeamSegments(BufferBuilder b, Matrix4f m, float min, float max, RenderEntry e, float alpha, float buriedAlpha) {
+        float[] seg = e.segments();
+        if (seg == null || seg.length == 0) {
+            addFace3D(b, m, min, max, 0, BEAM_HEIGHT, e.r(), e.g(), e.b(), alpha);
+            return;
+        }
+        for (int i = 0; i + 2 < seg.length; i += 3) {
+            boolean buried = seg[i + 2] > 0.5f;
+            if (buried) {
+                addFace3D(b, m, min, max, seg[i], seg[i + 1],
+                    e.r() * BURIED_DARKEN, e.g() * BURIED_DARKEN, e.b() * BURIED_DARKEN, buriedAlpha);
+            } else {
+                addFace3D(b, m, min, max, seg[i], seg[i + 1], e.r(), e.g(), e.b(), alpha);
+            }
         }
     }
 
