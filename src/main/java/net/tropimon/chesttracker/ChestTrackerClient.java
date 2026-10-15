@@ -28,6 +28,8 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
+import net.minecraft.world.chunk.ChunkSection;
+import net.minecraft.world.chunk.WorldChunk;
 import org.lwjgl.glfw.GLFW;
 import org.joml.Matrix4f;
 
@@ -56,8 +58,12 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static KeyBinding debugKey;
     private static boolean active = false;
 
-    private static final int SCAN_RADIUS = 64;
-    private static final int SCAN_BUDGET_PER_TICK = 30000;
+    // Scan par sections de chunk (16x16x16) : une section est sautée d'un coup si sa palette
+    // ne contient aucun bloc recherché, ce qui permet une grande portée et des passes rapides.
+    // Portée horizontale en chunks (12 = 192 blocs), limitée de fait par la distance de rendu.
+    private static final int SCAN_RADIUS_CHUNKS = 12;
+    private static final int SECTION_BUDGET_PER_TICK = 2000;
+    private static final int BLOCK_BUDGET_PER_TICK = 40000;
     private static final int BEAM_HEIGHT = 256;
 
     // Pas de faisceau sur les coffres/tonneaux Lootr à 10 blocs ou moins d'un spawner à mobs,
@@ -79,7 +85,11 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static final Set<BlockPos> nearSpawnerCache = new HashSet<>();
     private static World lastWorld = null;
 
-    private static Iterator<BlockPos> scanIterator = null;
+    private static boolean scanning = false;
+    private static int[] scanChunkXs = new int[0];
+    private static int[] scanChunkZs = new int[0];
+    private static int scanChunkIdx = 0;
+    private static int scanSectionIdx = 0;
     private static List<TrackedBlock> pendingBlocks = new ArrayList<>();
     private static List<TrackedBlock> cachedBlocks = new ArrayList<>();
 
@@ -127,7 +137,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 lastWorld = client.world;
                 nearSpawnerCache.clear();
                 cachedBlocks = new ArrayList<>();
-                scanIterator = null;
+                scanning = false;
                 pendingBlocks = new ArrayList<>();
             }
 
@@ -138,7 +148,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                     : "§cScanner + Autoloot : DÉSACTIVÉ"));
                 if (!active) {
                     cachedBlocks.clear();
-                    scanIterator = null;
+                    scanning = false;
                     pendingBlocks.clear();
                     nearSpawnerCache.clear();
                     pendingGrabSlots.clear();
@@ -158,43 +168,7 @@ public class ChestTrackerClient implements ClientModInitializer {
 
             if (!active) return;
 
-            // Démarre une nouvelle passe de scan si la précédente est terminée
-            if (scanIterator == null) {
-                BlockPos center = client.player.getBlockPos();
-                scanIterator = BlockPos.iterate(
-                    center.add(-SCAN_RADIUS, -SCAN_RADIUS, -SCAN_RADIUS),
-                    center.add(SCAN_RADIUS, SCAN_RADIUS, SCAN_RADIUS)
-                ).iterator();
-                pendingBlocks = new ArrayList<>();
-            }
-
-            // Ne traite qu'une tranche de la zone à chaque tick (évite le pic de lag)
-            int processed = 0;
-            while (scanIterator.hasNext() && processed < SCAN_BUDGET_PER_TICK) {
-                BlockPos pos = scanIterator.next();
-                BlockState state = client.world.getBlockState(pos);
-                BlockCategory category = targetBlocks.get(state.getBlock());
-                if (category != null) {
-                    boolean available;
-                    if (category == BlockCategory.LOOTR) {
-                        available = pos.getY() >= LOOTR_MIN_Y
-                            && !isOpenedByThisPlayer(client, pos)
-                            && !isNearSpawner(client.world, pos);
-                    } else {
-                        available = isAvailable(state);
-                    }
-                    if (available) {
-                        pendingBlocks.add(new TrackedBlock(pos.toImmutable(), category));
-                    }
-                }
-                processed++;
-            }
-
-            // Passe terminée : on bascule le résultat et on relance une nouvelle passe au prochain tick
-            if (!scanIterator.hasNext()) {
-                cachedBlocks = pendingBlocks;
-                scanIterator = null;
-            }
+            scanTick(client);
         });
 
         WorldRenderEvents.LAST.register(context -> {
@@ -341,6 +315,99 @@ public class ChestTrackerClient implements ClientModInitializer {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
+    // ===================== SCAN PAR SECTIONS =====================
+
+    private static boolean isTarget(BlockState state) {
+        return targetBlocks.containsKey(state.getBlock());
+    }
+
+    /** Prépare une passe : liste des chunks dans le rayon, du plus proche au plus lointain. */
+    private static void startScanPass(MinecraftClient client) {
+        int pcx = client.player.getBlockX() >> 4;
+        int pcz = client.player.getBlockZ() >> 4;
+        int r = SCAN_RADIUS_CHUNKS;
+        List<int[]> chunks = new ArrayList<>();
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dz = -r; dz <= r; dz++) {
+                if (dx * dx + dz * dz > r * r) continue;
+                chunks.add(new int[]{pcx + dx, pcz + dz, dx * dx + dz * dz});
+            }
+        }
+        chunks.sort((a, b) -> Integer.compare(a[2], b[2]));
+        scanChunkXs = new int[chunks.size()];
+        scanChunkZs = new int[chunks.size()];
+        for (int i = 0; i < chunks.size(); i++) {
+            scanChunkXs[i] = chunks.get(i)[0];
+            scanChunkZs[i] = chunks.get(i)[1];
+        }
+        scanChunkIdx = 0;
+        scanSectionIdx = 0;
+        pendingBlocks = new ArrayList<>();
+        scanning = true;
+    }
+
+    private static void scanTick(MinecraftClient client) {
+        if (!scanning) startScanPass(client);
+
+        int sections = 0;
+        int blocks = 0;
+        while (scanning && sections < SECTION_BUDGET_PER_TICK && blocks < BLOCK_BUDGET_PER_TICK) {
+            if (scanChunkIdx >= scanChunkXs.length) {
+                // Passe terminée : on publie le résultat, une nouvelle passe démarre au prochain tick
+                cachedBlocks = pendingBlocks;
+                scanning = false;
+                break;
+            }
+
+            int cx = scanChunkXs[scanChunkIdx];
+            int cz = scanChunkZs[scanChunkIdx];
+            WorldChunk chunk = client.world.getChunkManager().getWorldChunk(cx, cz);
+            if (chunk == null) {
+                scanChunkIdx++;
+                scanSectionIdx = 0;
+                continue;
+            }
+
+            ChunkSection[] secs = chunk.getSectionArray();
+            if (scanSectionIdx >= secs.length) {
+                scanChunkIdx++;
+                scanSectionIdx = 0;
+                continue;
+            }
+
+            int si = scanSectionIdx++;
+            sections++;
+            ChunkSection sec = secs[si];
+            if (sec == null || sec.isEmpty()) continue;
+            // Palette de la section : si aucun bloc recherché, on saute les 4096 blocs d'un coup
+            if (!sec.getBlockStateContainer().hasAny(ChestTrackerClient::isTarget)) continue;
+
+            int baseX = cx << 4;
+            int baseY = chunk.sectionIndexToCoord(si) << 4;
+            int baseZ = cz << 4;
+            for (int y = 0; y < 16; y++) {
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        BlockState state = sec.getBlockState(x, y, z);
+                        BlockCategory category = targetBlocks.get(state.getBlock());
+                        if (category == null) continue;
+                        BlockPos pos = new BlockPos(baseX + x, baseY + y, baseZ + z);
+                        boolean available;
+                        if (category == BlockCategory.LOOTR) {
+                            available = pos.getY() >= LOOTR_MIN_Y
+                                && !isOpenedByThisPlayer(client, pos)
+                                && !isNearSpawner(client.world, pos);
+                        } else {
+                            available = isAvailable(state);
+                        }
+                        if (available) pendingBlocks.add(new TrackedBlock(pos, category));
+                    }
+                }
+            }
+            blocks += 4096;
+        }
+    }
+
     private static boolean isAvailable(BlockState state) {
         Collection<Property<?>> properties = state.getProperties();
         for (Property<?> prop : properties) {
