@@ -440,6 +440,24 @@ public class ChestTrackerClient implements ClientModInitializer {
         return false;
     }
 
+    // Objets récupérés même si le joueur n'en possède pas encore :
+    //  - méga-gemmes de Mega Showdown (ex : mega_showdown:beedrillite, charizardite_x)
+    //  - cristaux Z de Mega Showdown (ex : mega_showdown:grassium_z)
+    //  - tableaux de Tropifurnitures (ex : tropifurnitures:painting_artwork1, painting2x2blank)
+    private static final java.util.regex.Pattern MEGA_STONE = java.util.regex.Pattern.compile("^[a-z_]+ite(_[xyz])?$");
+
+    private static boolean isAlwaysLooted(ItemStack stack) {
+        Identifier id = Registries.ITEM.getId(stack.getItem());
+        String ns = id.getNamespace();
+        String path = id.getPath();
+        if (ns.equals("mega_showdown")) {
+            if (path.endsWith("_z")) return true;                 // cristal Z
+            if (MEGA_STONE.matcher(path).matches()) return true;  // méga-gemme
+        }
+        if (ns.equals("tropifurnitures") && path.startsWith("painting")) return true; // tableau
+        return false;
+    }
+
     private static void queueMatchingItems(MinecraftClient client, ScreenHandler handler) {
         if (!(handler instanceof GenericContainerScreenHandler containerHandler)) {
             return;
@@ -462,7 +480,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                 }
             }
 
-            if (alreadyOwned) {
+            if (alreadyOwned || isAlwaysLooted(containerStack)) {
                 pendingGrabSlots.add(i);
             }
         }
