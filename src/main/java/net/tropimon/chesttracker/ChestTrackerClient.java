@@ -48,7 +48,7 @@ import java.util.UUID;
 
 public class ChestTrackerClient implements ClientModInitializer {
 
-    private enum BlockCategory { LOOTR, SAFARI_BALL, SUSPICIOUS }
+    private enum BlockCategory { LOOTR, SAFARI_BALL, SUSPICIOUS, POKESTOP }
 
     /**
      * darkFrom = hauteur (au-dessus du bloc trouvé) du premier bloc non-air traversé par le rayon.
@@ -187,14 +187,13 @@ public class ChestTrackerClient implements ClientModInitializer {
             List<RenderEntry> toRender = new ArrayList<>();
 
             for (TrackedBlock tb : cachedBlocks) {
-                boolean available = (tb.category() == BlockCategory.LOOTR)
-                    ? !isOpenedByThisPlayer(client, tb.pos())
-                    : isAvailable(client.world.getBlockState(tb.pos()));
+                boolean available = isTrackedAvailable(client, tb.pos(),
+                    client.world.getBlockState(tb.pos()), tb.category());
                 if (!available) continue;
 
                 float r, g, b;
                 switch (tb.category()) {
-                    case LOOTR -> { r = 0.0f; g = 0.6f; b = 1.0f; }
+                    case LOOTR, POKESTOP -> { r = 0.0f; g = 0.6f; b = 1.0f; }
                     case SAFARI_BALL -> { r = 0.0f; g = 1.0f; b = 0.0f; }
                     default -> { r = 1.0f; g = 0.0f; b = 0.0f; }
                 }
@@ -253,9 +252,45 @@ public class ChestTrackerClient implements ClientModInitializer {
                 targetBlocks.put(block, BlockCategory.SAFARI_BALL);
             } else if (path.contains("lootr")) {
                 targetBlocks.put(block, BlockCategory.LOOTR);
+            } else if (path.equals("pokestop")) {
+                targetBlocks.put(block, BlockCategory.POKESTOP);
             }
         }
         targetBlocksInitialized = true;
+    }
+
+    /** Vrai si le bloc doit avoir un faisceau maintenant. */
+    private static boolean isTrackedAvailable(MinecraftClient client, BlockPos pos, BlockState state, BlockCategory category) {
+        return switch (category) {
+            case LOOTR -> !isOpenedByThisPlayer(client, pos);
+            case POKESTOP -> isPokestopReady(client, pos);
+            default -> isAvailable(state);
+        };
+    }
+
+    // Pokéstop (Tropifurnitures) : bloc sur 3 étages, l'entité n'existe que sur l'étage du bas (part=0)
+    // et garde le cooldown (1 h) de chaque joueur, synchronisé par le serveur côté client.
+    private static final Map<Class<?>, Method> pokestopCooldownMethods = new HashMap<>();
+
+    /** Vrai pour l'étage du bas d'un Pokéstop sur lequel ce joueur n'est pas en cooldown. */
+    private static boolean isPokestopReady(MinecraftClient client, BlockPos pos) {
+        if (client.player == null || client.world == null) return false;
+        BlockEntity entity = client.world.getBlockEntity(pos);
+        if (entity == null) return false; // étages du haut : pas d'entité, pas de faisceau
+
+        Method method = pokestopCooldownMethods.computeIfAbsent(entity.getClass(), c -> {
+            try {
+                return c.getMethod("isOnCooldownFor", UUID.class);
+            } catch (NoSuchMethodException e) {
+                return null;
+            }
+        });
+        if (method == null) return true;
+        try {
+            return !(boolean) method.invoke(entity, client.player.getUuid());
+        } catch (Exception e) {
+            return true;
+        }
     }
 
     // Demande directement à Lootr : "est-ce que ce joueur précis a déjà ouvert ce coffre/tonneau ?"
@@ -365,12 +400,7 @@ public class ChestTrackerClient implements ClientModInitializer {
                         BlockCategory category = targetBlocks.get(state.getBlock());
                         if (category == null) continue;
                         BlockPos pos = new BlockPos(baseX + x, baseY + y, baseZ + z);
-                        boolean available;
-                        if (category == BlockCategory.LOOTR) {
-                            available = !isOpenedByThisPlayer(client, pos);
-                        } else {
-                            available = isAvailable(state);
-                        }
+                        boolean available = isTrackedAvailable(client, pos, state, category);
                         if (available) pendingBlocks.add(new TrackedBlock(pos, category, firstObstacleHeight(client.world, pos)));
                     }
                 }
@@ -579,7 +609,13 @@ public class ChestTrackerClient implements ClientModInitializer {
             client.player.sendMessage(Text.literal("§7BlockEntity : §f" + entity.getClass().getName()), false);
         }
 
-        if (targetBlocks.get(state.getBlock()) == BlockCategory.LOOTR) {
+        if (targetBlocks.get(state.getBlock()) == BlockCategory.POKESTOP) {
+            if (entity == null) {
+                client.player.sendMessage(Text.literal("§7Pokéstop : étage du haut (le faisceau part du bas)"), false);
+            } else {
+                boolean ready = isPokestopReady(client, pos);
+                client.player.sendMessage(Text.literal("§7Pokéstop : §f" + (ready ? "§adisponible (faisceau)" : "§cen cooldown (pas de faisceau)")), false);
+            }
         }
     }
 
