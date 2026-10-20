@@ -128,12 +128,19 @@ public class ChestTrackerClient implements ClientModInitializer {
             );
             currentContainerIsLootr = blockId.getNamespace().equals(LOOTR_NAMESPACE)
                 && (blockId.getPath().equals("lootr_chest") || blockId.getPath().equals("lootr_barrel"));
-            // Coffre ouvert / Pokéstop utilisé : on masque son faisceau tout de suite, sans attendre
-            // le prochain passage du scan (le Pokéstop fait 3 blocs : on couvre les étages du dessous)
-            BlockPos used = hitResult.getBlockPos().toImmutable();
-            recentlyUsed.add(used);
-            recentlyUsed.add(used.down());
-            recentlyUsed.add(used.down(2));
+            // Coffre Lootr ouvert / Pokéstop utilisé : on masque son faisceau tout de suite, sans attendre
+            // le prochain passage du scan. Uniquement pour ces deux types : le sable / gravier suspect
+            // (brossé au clic droit) garde son faisceau sans clignoter.
+            BlockCategory usedCategory = targetBlocks.get(world.getBlockState(hitResult.getBlockPos()).getBlock());
+            if (usedCategory == BlockCategory.LOOTR) {
+                recentlyUsed.add(hitResult.getBlockPos().toImmutable());
+            } else if (usedCategory == BlockCategory.POKESTOP) {
+                // Le Pokéstop fait 3 blocs : le faisceau part de l'étage du bas
+                BlockPos used = hitResult.getBlockPos().toImmutable();
+                recentlyUsed.add(used);
+                recentlyUsed.add(used.down());
+                recentlyUsed.add(used.down(2));
+            }
             return ActionResult.PASS;
         });
 
