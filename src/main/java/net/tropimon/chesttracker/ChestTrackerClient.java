@@ -84,6 +84,10 @@ public class ChestTrackerClient implements ClientModInitializer {
     private static World lastWorld = null;
 
     private static boolean scanning = false;
+
+    // Blocs utilisés (clic droit) depuis le début de la passe de scan en cours / précédente
+    private static final Set<BlockPos> recentlyUsed = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final Set<BlockPos> usedBeforePass = new HashSet<>();
     private static int[] scanChunkXs = new int[0];
     private static int[] scanChunkZs = new int[0];
     private static int scanChunkIdx = 0;
@@ -124,6 +128,12 @@ public class ChestTrackerClient implements ClientModInitializer {
             );
             currentContainerIsLootr = blockId.getNamespace().equals(LOOTR_NAMESPACE)
                 && (blockId.getPath().equals("lootr_chest") || blockId.getPath().equals("lootr_barrel"));
+            // Coffre ouvert / Pokéstop utilisé : on masque son faisceau tout de suite, sans attendre
+            // le prochain passage du scan (le Pokéstop fait 3 blocs : on couvre les étages du dessous)
+            BlockPos used = hitResult.getBlockPos().toImmutable();
+            recentlyUsed.add(used);
+            recentlyUsed.add(used.down());
+            recentlyUsed.add(used.down(2));
             return ActionResult.PASS;
         });
 
@@ -187,9 +197,14 @@ public class ChestTrackerClient implements ClientModInitializer {
             List<RenderEntry> toRender = new ArrayList<>();
 
             for (TrackedBlock tb : cachedBlocks) {
-                boolean available = isTrackedAvailable(client, tb.pos(),
-                    client.world.getBlockState(tb.pos()), tb.category());
-                if (!available) continue;
+                // Rendu léger : pas d'appel par réflexion à Lootr / au Pokéstop à chaque image.
+                // L'état « ouvert / en cooldown » vient du scan (moins d'1 s de retard), et un bloc
+                // qu'on vient d'utiliser est masqué immédiatement via recentlyUsed.
+                if (recentlyUsed.contains(tb.pos())) continue;
+                BlockState current = client.world.getBlockState(tb.pos());
+                if (targetBlocks.get(current.getBlock()) != tb.category()) continue; // bloc cassé / remplacé
+                if ((tb.category() == BlockCategory.SUSPICIOUS || tb.category() == BlockCategory.SAFARI_BALL)
+                        && !isAvailable(current)) continue;
 
                 float r, g, b;
                 switch (tb.category()) {
@@ -363,6 +378,10 @@ public class ChestTrackerClient implements ClientModInitializer {
             if (scanChunkIdx >= scanChunkXs.length) {
                 // Passe terminée : on publie le résultat, une nouvelle passe démarre au prochain tick
                 cachedBlocks = pendingBlocks;
+                // Le scan qui vient de finir connaît le vrai état des blocs utilisés pendant la passe
+                recentlyUsed.removeAll(usedBeforePass);
+                usedBeforePass.clear();
+                usedBeforePass.addAll(recentlyUsed);
                 scanning = false;
                 break;
             }
