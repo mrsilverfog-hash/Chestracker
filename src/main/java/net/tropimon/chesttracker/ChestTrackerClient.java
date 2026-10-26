@@ -541,10 +541,6 @@ public class ChestTrackerClient implements ClientModInitializer {
             }
         }
 
-        if (!pendingGrabSlots.isEmpty()) {
-            client.player.sendMessage(
-                Text.literal("§aAutoloot : " + pendingGrabSlots.size() + " objet(s) récupéré(s)"), true);
-        }
     }
 
     private static void processGrabQueue(MinecraftClient client, GenericContainerScreenHandler containerHandler) {
